@@ -23,6 +23,14 @@ MODEL_ID = "gemini-2.5-flash"
 MASTER_BOARD_ID = os.getenv("MASTER_BOARD_ID") or os.getenv("MONDAY_BOARD_ID")
 REFERENCE_DATA_FILE = "cybersecurity_content_pillars_matrix.xlsx"
 
+if not MASTER_BOARD_ID:
+    print("❌ FATAL: MASTER_BOARD_ID is not set!")
+    print("   → Add it to GitHub Secrets: Settings → Secrets → Actions → New Repository Secret")
+    print("   → Name: MASTER_BOARD_ID  Value: your Monday.com board ID (e.g. 18406005838)")
+    import sys; sys.exit(1)
+
+print(f"✅ Board ID loaded: {MASTER_BOARD_ID}")
+
 class MondayAPI:
     def __init__(self, api_key):
         self.api_key = api_key
