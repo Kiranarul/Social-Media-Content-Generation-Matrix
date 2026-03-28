@@ -2,11 +2,10 @@ import pandas as pd
 import google.generativeai as genai
 import os
 import json
-from datetime import datetime, timedelta
+from datetime import datetime
 from dotenv import load_dotenv
 import requests
 from collections import Counter
-from enum import Enum
 
 load_dotenv()
 
@@ -15,31 +14,16 @@ API_KEY = os.getenv("GEMINI_API_KEY")
 MONDAY_API_KEY = os.getenv("MONDAY_API_KEY")
 
 if not API_KEY or API_KEY == "your_gemini_api_key_here":
-    raise ValueError("GEMINI_API_KEY not configured")
+    print("WARNING: GEMINI_API_KEY not configured")
 
 genai.configure(api_key=API_KEY)
+# We default to gemini-2.5-flash for speed and context capabilities
 model = genai.GenerativeModel("gemini-2.5-flash")
 
-# Board IDs (Set these after creating boards)
-BOARD_CONTENT_REQUEST = os.getenv("BOARD_CONTENT_REQUEST")
-BOARD_CONTENT_OPTIONS = os.getenv("BOARD_CONTENT_OPTIONS")
-BOARD_CONTENT_IDEA = os.getenv("BOARD_CONTENT_IDEA")
-BOARD_TREND_HISTORY = os.getenv("BOARD_TREND_HISTORY")
-
-# Excel file for reference data (stored in GitHub repo)
+MASTER_BOARD_ID = os.getenv("MASTER_BOARD_ID")
 REFERENCE_DATA_FILE = "cybersecurity_content_pillars_matrix.xlsx"
 
-
-class WorkflowStage(Enum):
-    """Track which phase we're in"""
-    RECOMMEND = "recommend"
-    GENERATE_OPTIONS = "generate_options"
-    FINALIZE = "finalize"
-
-
 class MondayAPI:
-    """Helper class for Monday.com API operations"""
-    
     def __init__(self, api_key):
         self.api_key = api_key
         self.url = "https://api.monday.com/v2"
@@ -50,514 +34,268 @@ class MondayAPI:
         }
     
     def query(self, graphql_query, variables=None):
-        """Execute GraphQL query"""
-        response = requests.post(
-            self.url,
-            json={"query": graphql_query, "variables": variables or {}},
-            headers=self.headers
-        )
-        response.raise_for_status()
-        result = response.json()
-        
-        if "errors" in result:
-            raise Exception(f"Monday API Error: {result['errors']}")
-        
-        return result
+        res = requests.post(self.url, json={"query": graphql_query, "variables": variables or {}}, headers=self.headers)
+        res.raise_for_status()
+        data = res.json()
+        if "errors" in data: raise Exception(f"Monday API Error: {data['errors']}")
+        return data
     
-    def get_board_items(self, board_id, limit=100):
-        """Fetch all items from a board"""
-        query = """
-        query ($board_id: ID!, $limit: Int!) {
+    def get_board_groups(self, board_id):
+        return self.query("query($board_id: ID!) { boards(ids: [$board_id]) { groups { id title } } }", {"board_id": board_id})["data"]["boards"][0]["groups"]
+    
+    def get_group_items(self, board_id, group_id, limit=100):
+        q = """
+        query($board_id: ID!, $group_id: String!, $limit: Int!) {
             boards(ids: [$board_id]) {
-                items(limit: $limit) {
-                    id
-                    name
-                    column_values {
-                        id
-                        text
-                        value
+                groups(ids: [$group_id]) {
+                    items_page(limit: $limit) {
+                        items { id name column_values { id text value } }
                     }
                 }
             }
         }
         """
-        result = self.query(query, {"board_id": board_id, "limit": limit})
-        items = result["data"]["boards"][0]["items"]
-        
-        # Parse column values into dict
-        parsed_items = []
-        for item in items:
-            parsed = {"id": item["id"], "name": item["name"]}
-            for col in item["column_values"]:
-                parsed[col["id"]] = col["text"] or col["value"]
-            parsed_items.append(parsed)
-        
-        return parsed_items
+        items = self.query(q, {"board_id": board_id, "group_id": group_id, "limit": limit})["data"]["boards"][0]["groups"][0]["items_page"]["items"]
+        parsed = []
+        for i in items:
+            p = {"id": i["id"], "name": i["name"]}
+            for c in i["column_values"]: p[c["id"]] = c["text"] or c["value"]
+            parsed.append(p)
+        return parsed
     
-    def create_item(self, board_id, item_name, column_values=None):
-        """Create new item with column values"""
-        query = """
-        mutation ($board_id: ID!, $item_name: String!, $column_values: JSON) {
-            create_item(board_id: $board_id, item_name: $item_name, column_values: $column_values) {
-                id
-            }
-        }
-        """
-        result = self.query(query, {
-            "board_id": board_id,
-            "item_name": item_name,
-            "column_values": column_values or "{}"
-        })
-        return result["data"]["create_item"]["id"]
+    def create_item(self, board_id, group_id, item_name, parent_id=None, column_values=None):
+        if parent_id:
+            # Create subitem strictly with parent_item_id
+            q = """mutation($parent_id: ID!, $item_name: String!, $column_values: JSON) {
+                create_subitem(parent_item_id: $parent_id, item_name: $item_name, column_values: $column_values) { id }
+            }"""
+            return self.query(q, {"parent_id": str(parent_id), "item_name": item_name, "column_values": column_values or "{}"})["data"]["create_subitem"]["id"]
+        else:
+            q = """mutation($board_id: ID!, $group_id: String!, $item_name: String!, $column_values: JSON) {
+                create_item(board_id: $board_id, group_id: $group_id, item_name: $item_name, column_values: $column_values) { id }
+            }"""
+            return self.query(q, {"board_id": board_id, "group_id": group_id, "item_name": item_name, "column_values": column_values or "{}"})["data"]["create_item"]["id"]
     
     def update_column_value(self, item_id, column_id, value):
-        """Update a specific column value"""
-        query = """
-        mutation ($item_id: ID!, $column_id: String!, $value: JSON!) {
-            change_column_value(item_id: $item_id, column_id: $column_id, value: $value) {
-                id
-            }
-        }
-        """
-        result = self.query(query, {
-            "item_id": item_id,
-            "column_id": column_id,
-            "value": json.dumps(value)
-        })
-        return result["data"]["change_column_value"]["id"]
+        q = """mutation($item_id: ID!, $column_id: String!, $value: JSON!) {
+            change_column_value(item_id: $item_id, column_id: $column_id, value: $value) { id }
+        }"""
+        return self.query(q, {"item_id": str(item_id), "column_id": column_id, "value": json.dumps(value)})["data"]["change_column_value"]["id"]
     
     def update_status(self, item_id, column_id, status_label):
-        """Update status dropdown column"""
         return self.update_column_value(item_id, column_id, {"label": status_label})
 
-
 class ContentStrategyAI:
-    """AI-powered content strategist"""
-    
-    def __init__(self, monday_api):
+    def __init__(self, monday_api, board_id):
         self.monday = monday_api
+        self.board_id = board_id
+        self.groups = self._get_groups()
         self.history = self._load_history()
-        self.reference_data = self._load_reference_data()
+        self.ref = self._load_reference_data()
+    
+    def _get_groups(self):
+        return self.monday.get_board_groups(self.board_id)
     
     def _load_history(self):
-        """Load posting history from Monday.com"""
-        try:
-            return self.monday.get_board_items(BOARD_TREND_HISTORY)
-        except:
-            return []
+        hg = next((g for g in self.groups if "history" in g["title"].lower() or "archive" in g["title"].lower()), None)
+        if not hg: return []
+        try: return self.monday.get_group_items(self.board_id, hg["id"])
+        except: return []
     
     def _load_reference_data(self):
-        """Load Excel reference sheets"""
-        if not os.path.exists(REFERENCE_DATA_FILE):
-            return {}
-        
+        if not os.path.exists(REFERENCE_DATA_FILE): return {}
         xls = pd.ExcelFile(REFERENCE_DATA_FILE)
         return {
-            "pillars": pd.read_excel(xls, sheet_name="Pillars_Subpillars"),
-            "angles": pd.read_excel(xls, sheet_name="Content_Angles"),
-            "formats": pd.read_excel(xls, sheet_name="Content_Formats"),
-            "trends": pd.read_excel(xls, sheet_name="Trend_Radar")
-        }
-    
-    def analyze_patterns(self):
-        """Analyze historical posting patterns"""
-        if not self.history:
-            return {"message": "No history available"}
-        
-        platforms = [item.get("Platform", "") for item in self.history if item.get("Platform")]
-        formats = [item.get("Format", "") for item in self.history if item.get("Format")]
-        pillars = [item.get("Pillar", "") for item in self.history if item.get("Pillar")]
-        
-        return {
-            "platform_distribution": Counter(platforms),
-            "format_distribution": Counter(formats),
-            "pillar_distribution": Counter(pillars),
-            "total_posts": len(self.history)
+            "pillars": pd.read_excel(xls, sheet_name="Pillars_Subpillars") if "Pillars_Subpillars" in xls.sheet_names else pd.DataFrame(),
+            "formats": pd.read_excel(xls, sheet_name="Content_Formats") if "Content_Formats" in xls.sheet_names else pd.DataFrame(),
         }
     
     def recommend_next_post(self):
-        """Generate next best post recommendation"""
-        patterns = self.analyze_patterns()
+        pl, fm, pi = [], [], []
+        for i in self.history:
+            pl.append(i.get("Platform", ""))
+            fm.append(i.get("Format", ""))
+            pi.append(i.get("Pillar", ""))
+            
+        pc, fc = Counter([p for p in pl if p]), Counter([f for f in fm if f])
         
-        # Define all options
-        all_platforms = ["LinkedIn", "Instagram", "Twitter", "Facebook"]
-        all_formats = ["Post", "Carousel", "Reel", "Video", "Poll", "Story"]
+        all_pl = ["LinkedIn", "Instagram", "Twitter", "Facebook"]
+        all_fm = ["Post", "Carousel", "Reel", "Video", "Poll", "Story"]
+        apil = self.ref.get("pillars", pd.DataFrame())
+        all_pi = apil["Pillar"].unique().tolist() if not apil.empty and "Pillar" in apil.columns else []
         
-        # Get most used
-        most_used_platform = patterns["platform_distribution"].most_common(1)[0][0] if patterns["platform_distribution"] else None
-        most_used_format = patterns["format_distribution"].most_common(1)[0][0] if patterns["format_distribution"] else None
+        m_pl = pc.most_common(1)[0][0] if pc else None
+        m_fm = fc.most_common(1)[0][0] if fc else None
         
-        # Recommend something different (rotation strategy)
-        unused_platforms = [p for p in all_platforms if p != most_used_platform]
-        unused_formats = [f for f in all_formats if f != most_used_format]
+        r_pl = next((p for p in all_pl if p != m_pl), all_pl[0])
+        r_fm = next((f for f in all_fm if f != m_fm), all_fm[0])
+        r_pi = next((p for p in all_pi if p not in pi), all_pi[0] if all_pi else "General")
         
-        recommended_platform = unused_platforms[0] if unused_platforms else all_platforms[0]
-        recommended_format = unused_formats[0] if unused_formats else all_formats[0]
-        
-        # Get pillar gap
-        used_pillars = list(patterns["pillar_distribution"].keys())
-        all_pillars = self.reference_data["pillars"]["Pillar"].unique().tolist() if "Pillar" in self.reference_data["pillars"].columns else []
-        gap_pillars = [p for p in all_pillars if p not in used_pillars]
-        
-        recommended_pillar = gap_pillars[0] if gap_pillars else all_pillars[0] if all_pillars else "General"
-        
-        # Generate reasoning
-        reasons = []
-        if patterns["platform_distribution"].get(recommended_platform, 0) == 0:
-            reasons.append(f"You've never posted on {recommended_platform}")
-        elif patterns["platform_distribution"].get(recommended_platform, 0) < 3:
-            reasons.append(f"You've only posted {patterns['platform_distribution'][recommended_platform]} times on {recommended_platform}")
-        
-        if recommended_format not in patterns["format_distribution"]:
-            reasons.append(f"You haven't tried {recommended_format} format yet")
+        rs = []
+        if pc.get(r_pl, 0) == 0: rs.append(f"Never posted on {r_pl}")
+        if pc.get(r_pl, 0) < 3: rs.append(f"Only {pc.get(r_pl, 0)} posts on {r_pl}")
+        if r_fm not in fc: rs.append(f"Haven't tried {r_fm} recently")
         
         return {
-            "platform": recommended_platform,
-            "format": recommended_format,
-            "pillar": recommended_pillar,
-            "reasoning": " | ".join(reasons) if reasons else "Balanced content mix",
-            "confidence_score": min(95, 70 + len(self.history))  # More history = more confidence
+            "platform": r_pl, "format": r_fm, "pillar": r_pi,
+            "reasoning": " | ".join(rs) if rs else "Balanced mix assigned automatically.",
+            "confidence_score": min(95, 70 + len(self.history))
         }
 
-
 def generate_10_topics(platform, format_type, pillar):
-    """Generate 10 content topic options"""
     print(f"Generating 10 topics for {platform} {format_type} about {pillar}...")
-    
-    # Load context from reference data
-    context_str = ""
+    ctx = ""
     if os.path.exists(REFERENCE_DATA_FILE):
         xls = pd.ExcelFile(REFERENCE_DATA_FILE)
-        if "Pillars_Subpillars" in xls.sheet_names:
-            df_pillars = pd.read_excel(xls, sheet_name="Pillars_Subpillars")
-            context_str += "PILLARS:\n" + df_pillars.to_json(orient='records')[:3000] + "\n\n"
-        if "Content_Angles" in xls.sheet_names:
-            df_angles = pd.read_excel(xls, sheet_name="Content_Angles")
-            context_str += "ANGLES:\n" + df_angles.to_json(orient='records')[:3000] + "\n\n"
-        if "Content_Formats" in xls.sheet_names:
-            df_formats = pd.read_excel(xls, sheet_name="Content_Formats")
-            context_str += "FORMATS:\n" + df_formats.to_json(orient='records')[:3000] + "\n\n"
+        if "Pillars_Subpillars" in xls.sheet_names: ctx += "PILLARS:\n" + pd.read_excel(xls, sheet_name="Pillars_Subpillars").to_json(orient='records')[:3000] + "\n\n"
+        if "Content_Angles" in xls.sheet_names: ctx += "ANGLES:\n" + pd.read_excel(xls, sheet_name="Content_Angles").to_json(orient='records')[:3000] + "\n\n"
+        if "Trend_Radar" in xls.sheet_names: ctx += "TRENDS:\n" + pd.read_excel(xls, sheet_name="Trend_Radar").to_json(orient='records')[:3000] + "\n\n"
     
     prompt = f"""
-You are an elite content strategist for Infinitesol (cybersecurity company).
-
-Context:
-- Platform: {platform}
-- Format: {format_type}
-- Topic Pillar: {pillar}
-
-Reference Data:
-{context_str}
-
-Generate EXACTLY 10 unique, high-impact content topics.
-
-For each topic:
-1. Catchy title (specific, actionable)
-2. Brief description (2-3 sentences)
-3. Map to sub-pillar from reference data
-4. Map to content angle from reference data
-5. Map to trend topic from reference data
-6. Score: trend_score (1-10), credibility_score (1-10), virality_score (1-10)
-7. Mark top 3 picks with is_top_3=true
-
-Output STRICT JSON array matching this schema:
-[
-  {{
-    "id": 1,
-    "title": "string",
-    "description": "string",
-    "pillar": "string",
-    "sub_pillar": "string",
-    "content_angle": "string",
-    "trend_topic": "string",
-    "trend_score": 8,
-    "credibility_score": 9,
-    "virality_score": 7,
-    "is_top_3": true
-  }}
-]
-
-RAW JSON ONLY. No markdown.
+You are an elite content strategist for Infinitesol (cybersecurity).
+Context: Platform: {platform} | Format: {format_type} | Pillar: {pillar}
+Reference Data:\n{ctx}
+Generate EXACTLY 10 unique content topics mapping this context seamlessly.
+Scores: trend_score, credibility_score, virality_score (1-10). Mark exactly 3 with is_top_3=true.
+Output STRICT JSON array:
+[{{ "id": 1, "title": "string", "description": "string", "pillar": "string", "sub_pillar": "string", "content_angle": "string", "trend_topic": "string", "trend_score": 8, "credibility_score": 9, "virality_score": 7, "is_top_3": true }}]
+RAW JSON ONLY.
 """
-    
     try:
-        response = model.generate_content(prompt)
-        text = response.text.strip()
-        
-        # Clean markdown
-        if text.startswith("```json"):
-            text = text[7:-3].strip()
-        elif text.startswith("```"):
-            text = text[3:-3].strip()
-        
-        topics = json.loads(text)
-        print(f"✅ Generated {len(topics)} topics")
-        return topics
-    
+        req = model.generate_content(prompt).text.strip()
+        if req.startswith("```json"): req = req[7:-3].strip()
+        elif req.startswith("```"): req = req[3:-3].strip()
+        return json.loads(req)
     except Exception as e:
         print(f"❌ Error generating topics: {e}")
         return None
 
-
 def generate_full_content(topic):
-    """Generate complete content payload"""
-    print(f"Generating full content for: {topic['title']}")
-    
+    print(f"Generating full content for: {topic.get('title')}")
     prompt = f"""
-You are writing a masterclass content post for Infinitesol.
+Write a masterclass content post for Infinitesol.
+Blueprint: Platform: {topic.get('platform')} | Format: {topic.get('format')} | Pillar: {topic.get('pillar')} ({topic.get('sub_pillar')})
+Angle: {topic.get('content_angle')} | Trend: {topic.get('trend_topic')} | Title: {topic.get('title')} | Context: {topic.get('description')}
 
-Blueprint:
-- Platform: {topic['platform']}
-- Format: {topic['format']}
-- Pillar: {topic['pillar']} ({topic['sub_pillar']})
-- Angle: {topic['content_angle']}
-- Trend: {topic['trend_topic']}
-- Title: {topic['title']}
-- Context: {topic['description']}
-
-Requirements:
-1. content: Full post text (format for platform - e.g., carousel slides, video script, etc.)
+1. content: Full post text explicitly optimized for the platform.
 2. hooks: 5 alternative hooks (newline separated)
 3. keywords: SEO keywords (comma separated)
-4. competitor_insights: How legacy MSSPs fail vs how Infinitesol solves
+4. competitor_insights: How legacy MSSPs fail vs Infinitesol
 5. engagement_score: Integer 1-10
 
-Output STRICT JSON matching this schema:
-{{
-  "content": "full post text here",
-  "hooks": "Hook 1\\nHook 2\\nHook 3\\nHook 4\\nHook 5",
-  "keywords": "keyword1, keyword2, keyword3",
-  "competitor_insights": "analysis here",
-  "engagement_score": 9
-}}
-
-RAW JSON ONLY. No markdown.
+Output STRICT JSON:
+{{ "content": "text", "hooks": "Hook 1\\n...", "keywords": "kw1, kw2", "competitor_insights": "analysis", "engagement_score": 9 }}
+RAW JSON ONLY.
 """
-    
     try:
-        response = model.generate_content(prompt)
-        text = response.text.strip()
-        
-        if text.startswith("```json"):
-            text = text[7:-3].strip()
-        elif text.startswith("```"):
-            text = text[3:-3].strip()
-        
-        payload = json.loads(text)
-        print(f"✅ Generated full content payload")
-        return payload
-    
+        req = model.generate_content(prompt).text.strip()
+        if req.startswith("```json"): req = req[7:-3].strip()
+        elif req.startswith("```"): req = req[3:-3].strip()
+        return json.loads(req)
     except Exception as e:
-        print(f"❌ Error generating content: {e}")
+        print(f"❌ Error generating payload: {e}")
         return None
-
 
 def run_recommendation_stage():
-    """PHASE 1: Generate and post recommendation"""
-    print("\n=== PHASE 1: AI Recommendation ===")
-    
+    print("=== PHASE 1: AI Recommendation ===")
     monday = MondayAPI(MONDAY_API_KEY)
-    strategist = ContentStrategyAI(monday)
+    groups = monday.get_board_groups(MASTER_BOARD_ID)
+    rg = next((g for g in groups if "Request" in g["title"] or "Active" in g["title"]), groups[0])
     
-    # Get recommendation
-    recommendation = strategist.recommend_next_post()
-    
-    # Post to Content Request board
-    item_id = monday.create_item(
-        board_id=BOARD_CONTENT_REQUEST,
-        item_name=f"🎯 AI Recommendation: {recommendation['pillar']}",
-        column_values=json.dumps({
-            "Platform": {"label": recommendation["platform"]},
-            "Format": {"label": recommendation["format"]},
-            "Topic_Pillar": recommendation["pillar"],
-            "Reasoning": recommendation["reasoning"],
-            "Confidence_Score": str(recommendation["confidence_score"]),
-            "Status": {"label": "Pending Review"}
-        })
-    )
-    
-    print(f"✅ Recommendation posted to Monday.com (Item ID: {item_id})")
-    print(f"   Platform: {recommendation['platform']}")
-    print(f"   Format: {recommendation['format']}")
-    print(f"   Pillar: {recommendation['pillar']}")
-    print(f"   Why: {recommendation['reasoning']}")
-    
-    return item_id
+    rec = ContentStrategyAI(monday, MASTER_BOARD_ID).recommend_next_post()
+    item_id = monday.create_item(MASTER_BOARD_ID, rg["id"], f"🎯 AI Recommendation: {rec['pillar']}", column_values=json.dumps({
+        "Platform": {"label": rec.get("platform")},
+        "Format": {"label": rec.get("format")},
+        "Description": rec.get("reasoning"), 
+        "Status": {"label": "Ready to Generate"}
+    }))
+    print(f"✅ Posted (Item ID: {item_id})")
 
-
-def run_generation_stage(request_item_id, platform, format_type, pillar):
-    """PHASE 2: Generate 10 topic options"""
-    print("\n=== PHASE 2: Topic Generation ===")
-    
-    # Generate 10 topics
+def run_generation_stage(request_id, platform, format_type, pillar):
+    print("=== PHASE 2: Topic Generation ===")
     topics = generate_10_topics(platform, format_type, pillar)
-    
-    if not topics:
-        print("❌ Topic generation failed")
-        return None
+    if not topics: return
     
     monday = MondayAPI(MONDAY_API_KEY)
-    
-    # Post ALL 10 to Content Options board
-    topic_ids = []
-    for topic in topics:
-        item_id = monday.create_item(
-            board_id=BOARD_CONTENT_OPTIONS,
-            item_name=topic["title"],
-            column_values=json.dumps({
-                "Description": topic["description"],
-                "Platform": {"label": platform},
-                "Format": {"label": format_type},
-                "Pillar": {"label": pillar},
-                "Sub_Pillar": topic.get("sub_pillar", ""),
-                "Content_Angle": topic.get("content_angle", ""),
-                "Trend_Topic": topic.get("trend_topic", ""),
-                "Trend_Score": str(topic.get("trend_score", 0)),
-                "Credibility_Score": str(topic.get("credibility_score", 0)),
-                "Virality_Score": str(topic.get("virality_score", 0)),
-                "Is_Top_3": "Yes" if topic.get("is_top_3") else "No",
-                "Status": {"label": "Pending Selection"},
-                "Parent_Request_ID": request_item_id
-            })
-        )
-        topic_ids.append(item_id)
-    
-    print(f"✅ Posted {len(topics)} options to Monday.com")
-    print(f"   Top 3 picks marked with Is_Top_3=Yes")
-    
-    # Update request status
-    monday.update_status(request_item_id, "Status", "Topics Generated")
-    
-    return topic_ids
+    for t in topics:
+        monday.create_item(MASTER_BOARD_ID, "", t["title"], parent_id=request_id, column_values=json.dumps({
+            "Description": t.get("description", ""),
+            "Platform": {"label": platform},
+            "Format": {"label": format_type},
+            "Sub_Pillar": t.get("sub_pillar", ""),
+            "Angle": t.get("content_angle", ""),
+            "Trend": t.get("trend_topic", ""),
+            "Status": {"label": "Pending Selection"},
+        }))
+    print(f"✅ Created {len(topics)} sub-items successfully!")
+    monday.update_status(request_id, "Status", "Topics Generated")
 
-
-def run_finalization_stage(selected_topic_item_id):
-    """PHASE 3: Generate full content"""
-    print("\n=== PHASE 3: Content Finalization ===")
-    
+def run_finalization_stage(selected_id):
+    print("=== PHASE 3: Content Finalization ===")
     monday = MondayAPI(MONDAY_API_KEY)
+    groups = monday.get_board_groups(MASTER_BOARD_ID)
+    cg = next((g for g in groups if "Ready" in g["title"] or "Content" in g["title"]), groups[2] if len(groups)>2 else groups[0])
     
-    # Get selected topic details
-    items = monday.get_board_items(BOARD_CONTENT_OPTIONS)
-    selected_item = next((item for item in items if str(item["id"]) == str(selected_topic_item_id)), None)
-    
-    if not selected_item:
-        print("❌ Selected item not found")
-        return
-    
-    # Reconstruct topic object
-    topic = {
-        "title": selected_item["name"],
-        "platform": selected_item.get("Platform", ""),
-        "format": selected_item.get("Format", ""),
-        "pillar": selected_item.get("Pillar", ""),
-        "sub_pillar": selected_item.get("Sub_Pillar", ""),
-        "content_angle": selected_item.get("Content_Angle", ""),
-        "trend_topic": selected_item.get("Trend_Topic", ""),
-        "description": selected_item.get("Description", "")
+    # FETCH SUBITEM AND PARENT ITEM CONTEXT NATIVELY TO EXTRACT PARENT'S PLATFORM AND FORMAT!
+    q = """
+    query ($item_id: ID!) {
+        items (ids: [$item_id]) {
+            name
+            column_values { id text }
+            parent_item {
+                name
+                column_values { id text }
+            }
+        }
     }
-    
-    # Generate full content
-    payload = generate_full_content(topic)
-    
-    if not payload:
-        print("❌ Content generation failed")
-        return
-    
-    # Post to Content Idea Generator board (all 20 columns!)
-    final_item_id = monday.create_item(
-        board_id=BOARD_CONTENT_IDEA,
-        item_name=topic["title"],
-        column_values=json.dumps({
-            "Pillar": {"label": topic["pillar"]},
-            "Sub_Pillar": topic["sub_pillar"],
-            "Angle_Category": "",  
-            "Content_Angle": topic["content_angle"],
-            "Format_Category": "",  
-            "Content_Type": topic["format"],
-            "Platform": topic["platform"],
-            "Trend_Category": "",  
-            "Trend_Topic": topic["trend_topic"],
-            "Urgency": {"label": "High"},
-            "Target_Audience": "US Mid-Market / Enterprise",
-            "Intent": {"label": "Authority Building"},
-            "Competitor": "",
-            "Status": {"label": "Done"},
-            "AI_Output": payload.get("content", "")[:2000], 
-            "Hooks": payload.get("hooks", "")[:2000],
-            "Keywords": payload.get("keywords", "")[:2000],
-            "Competitor_Insights": payload.get("competitor_insights", "")[:2000],
-            "Engagement_Score": str(payload.get("engagement_score", "0")),
-            "Last_Updated": datetime.now().strftime("%Y-%m-%d")
+    """
+    try:
+        res = monday.query(q, {"item_id": selected_id})
+        si = res["data"]["items"][0]
+        pi = si.get("parent_item")
+        
+        topic = {"title": si["name"], "platform": "", "format": "", "pillar": "", "sub_pillar": "", "content_angle": "", "trend_topic": "", "description": ""}
+        
+        # Load from subitem columns
+        for c in si["column_values"]:
+            l = c["id"].lower()
+            if "platform" in l: topic["platform"] = c["text"]
+            elif "format" in l: topic["format"] = c["text"]
+            elif "pillar" in l: topic["pillar"] = c["text"]
+            elif "angle" in l or "text" in l: topic["content_angle"] = c["text"]
+            elif "trend" in l or "text1" in l: topic["trend_topic"] = c["text"]
+            elif "description" in l or "long_text" in l: topic["description"] = c["text"]
+            
+        # Overwrite missing platform/format from PARENT item specifically!
+        if pi:
+            for c in pi["column_values"]:
+                l = c["id"].lower()
+                if "platform" in l and not topic["platform"]: topic["platform"] = c["text"]
+                if "format" in l and not topic["format"]: topic["format"] = c["text"]
+                if "pillar" in l and not topic["pillar"]: topic["pillar"] = c["text"]
+                
+        payload = generate_full_content(topic)
+        if not payload: return
+        
+        final_id = monday.create_item(MASTER_BOARD_ID, cg["id"], topic["title"], column_values=json.dumps({"Status": {"label": "Ready to Publish"}}))
+        monday.query("""mutation($item_id: ID!, $body: String!) { create_update (item_id: $item_id, body: $body) { id } }""", {
+            "item_id": str(final_id),
+            "body": f"<h2>FINAL GENERATED CONTENT</h2><br><b>Post:</b><br>{payload.get('content', '')}<br><br><b>Hooks:</b><br>{payload.get('hooks', '')}"
         })
-    )
-    
-    # Log to history
-    monday.create_item(
-        board_id=BOARD_TREND_HISTORY,
-        item_name=topic["title"],
-        column_values=json.dumps({
-            "Date": datetime.now().strftime("%Y-%m-%d"),
-            "Platform": {"label": topic["platform"]},
-            "Format": {"label": topic["format"]},
-            "Pillar": {"label": topic["pillar"]},
-            "SubPillar": topic["sub_pillar"],
-            "Trend": topic["trend_topic"],
-            "Angle": topic["content_angle"],
-            "Description": topic["description"][:2000],
-            "TrendScore": selected_item.get("Trend_Score", "0"),
-            "CredScore": selected_item.get("Credibility_Score", "0"),
-            "ViralScore": selected_item.get("Virality_Score", "0")
-        })
-    )
-    
-    # Update statuses
-    monday.update_status(selected_topic_item_id, "Status", "Generated")
-    monday.update_status(final_item_id, "Status", "Ready to Publish")
-    
-    print(f"✅ Full content generated and posted!")
-    print(f"   Final Item ID: {final_item_id}")
-    print(f"   Content preview: {payload.get('content', '')[:200]}...")
-
+        monday.update_status(selected_id, "Status", "Topic Selected")
+        if pi:
+             monday.update_status(pi["id"], "Status", "Done")
+        print("✅ Content perfectly mapped to Monday!")
+    except Exception as e:
+        print(f"❌ Could not pull specific subitem from graph: {e}")
 
 def main():
-    """Main entry point - called by GitHub Actions"""
     import sys
-    
-    if len(sys.argv) < 2:
-        print("Usage: python ai_engine.py <stage> [args]")
-        print("Stages:")
-        print("  recommend")
-        print("  generate <request_item_id> <platform> <format> <pillar>")
-        print("  finalize <selected_topic_item_id>")
-        sys.exit(1)
-    
-    stage = sys.argv[1]
-    
-    if stage == "recommend":
-        run_recommendation_stage()
-    
-    elif stage == "generate":
-        if len(sys.argv) < 6:
-            print("❌ Missing arguments for generate stage")
-            sys.exit(1)
-        request_item_id = sys.argv[2]
-        platform = sys.argv[3]
-        format_type = sys.argv[4]
-        pillar = sys.argv[5]
-        run_generation_stage(request_item_id, platform, format_type, pillar)
-    
-    elif stage == "finalize":
-        if len(sys.argv) < 3:
-            print("❌ Missing argument for finalize stage")
-            sys.exit(1)
-        selected_item_id = sys.argv[2]
-        run_finalization_stage(selected_item_id)
-    
-    else:
-        print(f"❌ Unknown stage: {stage}")
-        sys.exit(1)
-
+    if len(sys.argv) < 2: sys.exit(1)
+    st = sys.argv[1]
+    if st == "recommend": run_recommendation_stage()
+    elif st == "generate": run_generation_stage(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5])
+    elif st == "finalize": run_finalization_stage(sys.argv[2])
 
 if __name__ == "__main__":
     main()
