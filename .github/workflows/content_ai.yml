@@ -1,26 +1,45 @@
 name: Monday AI Content Factory
 
 on:
+  schedule:
+    - cron: '0 13 * * 1' # Runs automatically every Monday morning at 9AM EST
+  workflow_dispatch: # Allows you to manually click "Run Workflow" in GitHub 
   repository_dispatch:
     types: 
+      - monday-recommend-post
       - monday-start-generation
       - monday-topic-selected
 
 jobs:
-  # Phase 1 & 2: Generate topics
+  # PHASE 1: Generate AI Strategy Recommendation
+  recommend-strategy:
+    if: github.event.action == 'monday-recommend-post' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Generate AI Strategy Recommendation
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          MONDAY_API_KEY: ${{ secrets.MONDAY_API_KEY }}
+          MASTER_BOARD_ID: ${{ secrets.MASTER_BOARD_ID }}
+        run: python ai_engine.py recommend
+
+  # PHASE 2: Generate topic subitems
   generate-topics:
     if: github.event.action == 'monday-start-generation'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      
       - uses: actions/setup-python@v4
         with:
           python-version: '3.9'
-      
       - name: Install dependencies
         run: pip install -r requirements.txt
-      
       - name: Extract data
         id: extract
         run: |
@@ -28,33 +47,25 @@ jobs:
           echo "PLATFORM=${{ github.event.client_payload.platform || 'LinkedIn' }}" >> $GITHUB_OUTPUT
           echo "FORMAT=${{ github.event.client_payload.format || 'Post' }}" >> $GITHUB_OUTPUT
           echo "PILLAR=${{ github.event.client_payload.pillar || 'General' }}" >> $GITHUB_OUTPUT
-      
       - name: Generate 10 Topics
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           MONDAY_API_KEY: ${{ secrets.MONDAY_API_KEY }}
           MASTER_BOARD_ID: ${{ secrets.MASTER_BOARD_ID }}
         run: |
-          python ai_engine.py generate \
-            "${{ steps.extract.outputs.REQUEST_ID }}" \
-            "${{ steps.extract.outputs.PLATFORM }}" \
-            "${{ steps.extract.outputs.FORMAT }}" \
-            "${{ steps.extract.outputs.PILLAR }}"
+          python ai_engine.py generate "${{ steps.extract.outputs.REQUEST_ID }}" "${{ steps.extract.outputs.PLATFORM }}" "${{ steps.extract.outputs.FORMAT }}" "${{ steps.extract.outputs.PILLAR }}"
 
-  # Phase 3: Finalize content
+  # PHASE 3: Finalize content
   finalize-content:
     if: github.event.action == 'monday-topic-selected'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      
       - uses: actions/setup-python@v4
         with:
           python-version: '3.9'
-      
       - name: Install dependencies
         run: pip install -r requirements.txt
-      
       - name: Generate Final Content
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
