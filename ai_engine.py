@@ -1,5 +1,5 @@
 import pandas as pd
-import google.generativeai as genai
+from google import genai
 import os
 import json
 from datetime import datetime
@@ -16,11 +16,11 @@ MONDAY_API_KEY = os.getenv("MONDAY_API_KEY")
 if not API_KEY or API_KEY == "your_gemini_api_key_here":
     print("WARNING: GEMINI_API_KEY not configured")
 
-genai.configure(api_key=API_KEY)
-# We default to gemini-2.5-flash for speed and context capabilities
-model = genai.GenerativeModel("gemini-2.5-flash")
+# Using the new google-genai SDK (replaces deprecated google-generativeai)
+client = genai.Client(api_key=API_KEY)
+MODEL_ID = "gemini-2.5-flash"
 
-MASTER_BOARD_ID = os.getenv("MASTER_BOARD_ID")
+MASTER_BOARD_ID = os.getenv("MASTER_BOARD_ID") or os.getenv("MONDAY_BOARD_ID")
 REFERENCE_DATA_FILE = "cybersecurity_content_pillars_matrix.xlsx"
 
 class MondayAPI:
@@ -162,7 +162,7 @@ Output STRICT JSON array:
 RAW JSON ONLY.
 """
     try:
-        req = model.generate_content(prompt).text.strip()
+        req = client.models.generate_content(model=MODEL_ID, contents=prompt).text.strip()
         if req.startswith("```json"): req = req[7:-3].strip()
         elif req.startswith("```"): req = req[3:-3].strip()
         return json.loads(req)
@@ -188,7 +188,7 @@ Output STRICT JSON:
 RAW JSON ONLY.
 """
     try:
-        req = model.generate_content(prompt).text.strip()
+        req = client.models.generate_content(model=MODEL_ID, contents=prompt).text.strip()
         if req.startswith("```json"): req = req[7:-3].strip()
         elif req.startswith("```"): req = req[3:-3].strip()
         return json.loads(req)
