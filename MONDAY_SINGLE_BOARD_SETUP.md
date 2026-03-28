@@ -73,7 +73,7 @@ THEN Move item to "📚 History" group
 ```
 WHEN Status changes to "Ready to Generate"
 THEN Send webhook
-     URL: https://api.github.com/repos/YOUR_USERNAME/YOUR_REPO/dispatches
+     URL: https://api.github.com/repos/Kiranarul/Social-Media-Content-Generation-Matrix/dispatches
      Event: monday-start-generation
      Payload: {
        "request_item_id": "{{item.id}}",
@@ -87,7 +87,7 @@ THEN Send webhook
 ```
 WHEN Subitem Status changes to "Topic Selected"
 THEN Send webhook
-     URL: https://api.github.com/repos/YOUR_USERNAME/YOUR_REPO/dispatches
+     URL: https://api.github.com/repos/Kiranarul/Social-Media-Content-Generation-Matrix/dispatches
      Event: monday-topic-selected
      Payload: {
        "selected_item_id": "{{item.id}}"

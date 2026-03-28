@@ -204,10 +204,11 @@ def run_recommendation_stage():
     
     rec = ContentStrategyAI(monday, MASTER_BOARD_ID).recommend_next_post()
     item_id = monday.create_item(MASTER_BOARD_ID, rg["id"], f"🎯 AI Recommendation: {rec['pillar']}", column_values=json.dumps({
-        "Platform": {"label": rec.get("platform")},
-        "Format": {"label": rec.get("format")},
-        "Description": rec.get("reasoning"), 
-        "Status": {"label": "Ready to Generate"}
+        "dropdown_mm1w7sd9": {"labels": [rec.get("platform")]},
+        "dropdown_mm1w72b4": {"labels": [rec.get("format")]},
+        "text_mm1w3t2c": rec.get("pillar", ""),
+        "long_text_mm1wzgth": {"text": rec.get("reasoning", "")},
+        "status": {"label": "Ready to Generate"}
     }))
     print(f"✅ Posted (Item ID: {item_id})")
 
@@ -219,16 +220,16 @@ def run_generation_stage(request_id, platform, format_type, pillar):
     monday = MondayAPI(MONDAY_API_KEY)
     for t in topics:
         monday.create_item(MASTER_BOARD_ID, "", t["title"], parent_id=request_id, column_values=json.dumps({
-            "Description": t.get("description", ""),
-            "Platform": {"label": platform},
-            "Format": {"label": format_type},
-            "Sub_Pillar": t.get("sub_pillar", ""),
-            "Angle": t.get("content_angle", ""),
-            "Trend": t.get("trend_topic", ""),
-            "Status": {"label": "Pending Selection"},
+            "long_text_mm1wg3xz": {"text": t.get("description", "")},
+            "dropdown_mm1wepd4": {"labels": [platform]},
+            "dropdown_mm1wppt3": {"labels": [format_type]},
+            "text_mm1wxd4b": t.get("sub_pillar", ""),
+            "text_mm1wv8e3": t.get("content_angle", ""),
+            "text_mm1wesed": t.get("trend_topic", ""),
+            "status": {"label": "Pending Selection"},
         }))
     print(f"✅ Created {len(topics)} sub-items successfully!")
-    monday.update_status(request_id, "Status", "Topics Generated")
+    monday.update_status(request_id, "status", "Topics Generated")
 
 def run_finalization_stage(selected_id):
     print("=== PHASE 3: Content Finalization ===")
@@ -277,14 +278,14 @@ def run_finalization_stage(selected_id):
         payload = generate_full_content(topic)
         if not payload: return
         
-        final_id = monday.create_item(MASTER_BOARD_ID, cg["id"], topic["title"], column_values=json.dumps({"Status": {"label": "Ready to Publish"}}))
+        final_id = monday.create_item(MASTER_BOARD_ID, cg["id"], topic["title"], column_values=json.dumps({"status": {"label": "Ready to Publish"}}))
         monday.query("""mutation($item_id: ID!, $body: String!) { create_update (item_id: $item_id, body: $body) { id } }""", {
             "item_id": str(final_id),
             "body": f"<h2>FINAL GENERATED CONTENT</h2><br><b>Post:</b><br>{payload.get('content', '')}<br><br><b>Hooks:</b><br>{payload.get('hooks', '')}"
         })
-        monday.update_status(selected_id, "Status", "Topic Selected")
+        monday.update_status(selected_id, "status", "Topic Selected")
         if pi:
-             monday.update_status(pi["id"], "Status", "Done")
+             monday.update_status(pi["id"], "status", "Done")
         print("✅ Content perfectly mapped to Monday!")
     except Exception as e:
         print(f"❌ Could not pull specific subitem from graph: {e}")
