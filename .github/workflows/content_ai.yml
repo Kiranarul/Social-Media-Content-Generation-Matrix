@@ -1,0 +1,113 @@
+name: Monday.com AI Content Generator
+
+on:
+  repository_dispatch:
+    types: 
+      - monday-start-generation
+      - monday-topic-selected
+
+jobs:
+  # PHASE 1: Generate AI Recommendation
+  recommend:
+    if: github.event.action == 'monday-start-generation'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+      
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+      
+      - name: Generate AI Recommendation
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          MONDAY_API_KEY: ${{ secrets.MONDAY_API_KEY }}
+          BOARD_CONTENT_REQUEST: ${{ secrets.BOARD_CONTENT_REQUEST }}
+          BOARD_CONTENT_OPTIONS: ${{ secrets.BOARD_CONTENT_OPTIONS }}
+          BOARD_CONTENT_IDEA: ${{ secrets.BOARD_CONTENT_IDEA }}
+          BOARD_TREND_HISTORY: ${{ secrets.BOARD_TREND_HISTORY }}
+        run: python ai_engine.py recommend
+      
+      - name: Notify Completion
+        run: echo "✅ Phase 1 Complete - AI recommendation posted to Monday.com"
+
+  # PHASE 2: Generate 10 Topic Options
+  generate-topics:
+    if: github.event.action == 'monday-start-generation'
+    runs-on: ubuntu-latest
+    needs: recommend
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+      
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+      
+      - name: Extract Request Data
+        id: extract
+        run: |
+          echo "REQUEST_ID=${{ github.event.client_payload.request_item_id }}" >> $GITHUB_OUTPUT
+          echo "PLATFORM=${{ github.event.client_payload.platform }}" >> $GITHUB_OUTPUT
+          echo "FORMAT=${{ github.event.client_payload.format }}" >> $GITHUB_OUTPUT
+          echo "PILLAR=${{ github.event.client_payload.pillar }}" >> $GITHUB_OUTPUT
+      
+      - name: Generate 10 Topics
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          MONDAY_API_KEY: ${{ secrets.MONDAY_API_KEY }}
+          BOARD_CONTENT_REQUEST: ${{ secrets.BOARD_CONTENT_REQUEST }}
+          BOARD_CONTENT_OPTIONS: ${{ secrets.BOARD_CONTENT_OPTIONS }}
+          BOARD_CONTENT_IDEA: ${{ secrets.BOARD_CONTENT_IDEA }}
+          BOARD_TREND_HISTORY: ${{ secrets.BOARD_TREND_HISTORY }}
+        run: |
+          python ai_engine.py generate \
+            "${{ steps.extract.outputs.REQUEST_ID }}" \
+            "${{ steps.extract.outputs.PLATFORM }}" \
+            "${{ steps.extract.outputs.FORMAT }}" \
+            "${{ steps.extract.outputs.PILLAR }}"
+      
+      - name: Notify Completion
+        run: echo "✅ Phase 2 Complete - 10 topics posted to Monday.com"
+
+  # PHASE 3: Generate Final Content
+  finalize-content:
+    if: github.event.action == 'monday-topic-selected'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+      
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+      
+      - name: Generate Final Content
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          MONDAY_API_KEY: ${{ secrets.MONDAY_API_KEY }}
+          BOARD_CONTENT_REQUEST: ${{ secrets.BOARD_CONTENT_REQUEST }}
+          BOARD_CONTENT_OPTIONS: ${{ secrets.BOARD_CONTENT_OPTIONS }}
+          BOARD_CONTENT_IDEA: ${{ secrets.BOARD_CONTENT_IDEA }}
+          BOARD_TREND_HISTORY: ${{ secrets.BOARD_TREND_HISTORY }}
+        run: |
+          python ai_engine.py finalize "${{ github.event.client_payload.selected_item_id }}"
+      
+      - name: Notify Completion
+        run: echo "✅ Phase 3 Complete - Full content ready in Monday.com"
