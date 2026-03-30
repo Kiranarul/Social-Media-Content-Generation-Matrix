@@ -94,6 +94,33 @@ class MondayAPI:
     def update_status(self, item_id, column_id, status_label, board_id=None):
         return self.update_column_value(item_id, column_id, {"label": status_label}, board_id=board_id)
 
+    def post_update(self, item_id, body):
+        """Post a comment/update on any item or subitem. Surfaces full errors."""
+        # Monday limits update body to ~50,000 chars — truncate safely
+        if len(body) > 45000:
+            body = body[:45000] + "<br><br><i>... (truncated for length)</i>"
+        q = """mutation($item_id: ID!, $body: String!) {
+            create_update(item_id: $item_id, body: $body) { id }
+        }"""
+        try:
+            result = self.query(q, {"item_id": str(item_id), "body": body})
+            update_id = result["data"]["create_update"]["id"]
+            print(f"   ✅ Posted update (ID: {update_id}) on item {item_id}")
+            return update_id
+        except Exception as e:
+            print(f"   ❌ FAILED to post update on item {item_id}: {e}")
+            # Retry with plain text stripped of HTML tags
+            import re
+            plain = re.sub(r'<[^>]+>', ' ', body).strip()
+            try:
+                result = self.query(q, {"item_id": str(item_id), "body": plain[:10000]})
+                update_id = result["data"]["create_update"]["id"]
+                print(f"   ✅ Posted plain-text fallback update (ID: {update_id}) on item {item_id}")
+                return update_id
+            except Exception as e2:
+                print(f"   ❌ FINAL FAILURE posting update on item {item_id}: {e2}")
+                return None
+
 class ContentStrategyAI:
     def __init__(self, monday_api, board_id):
         self.monday = monday_api
@@ -284,30 +311,29 @@ def run_generation_stage(request_id, platform, format_type, pillar):
             "status": {"label": "Pending Selection"},
         }))
         
-        # Build score comment — all ranking info goes here for clarity
+        # Post score comment in Updates — use dedicated method with full error surfacing
         if rank == 1:
             rank_badge = "🥇 AI TOP PICK — RANK #1"
             why = (
                 f"<br><br><b>💡 Why this is ranked #1:</b><br>"
-                f"This topic scores highest overall ({t['_score']}/30) across all 3 dimensions. "
-                f"Trend Score {t.get('trend_score')}/10 shows this topic is currently relevant in the cybersecurity space. "
-                f"Credibility Score {t.get('credibility_score')}/10 means Infinitesol has strong authority to speak on this. "
-                f"Virality Score {t.get('virality_score')}/10 indicates high sharing/engagement potential on {platform}. "
-                f"Combined, this is the strongest content opportunity right now."
+                f"Highest overall score ({t['_score']}/30) across all 3 dimensions. "
+                f"Trend: {t.get('trend_score')}/10 — currently hot in cybersecurity. "
+                f"Credibility: {t.get('credibility_score')}/10 — Infinitesol has strong authority here. "
+                f"Virality: {t.get('virality_score')}/10 — high sharing potential on {platform}."
             )
         elif rank == 2:
             rank_badge = "🥈 AI RECOMMENDED — RANK #2"
             why = (
                 f"<br><br><b>💡 Why Rank #2:</b><br>"
-                f"Strong alternative ({t['_score']}/30). "
-                f"{top_score - t['_score']} point(s) behind #1. Good choice if #1 topic feels too broad."
+                f"Score {t['_score']}/30 — {top_score - t['_score']} pt(s) behind #1. "
+                f"Good pick if #1 feels too broad."
             )
         elif rank == 3:
             rank_badge = "🥉 AI RECOMMENDED — RANK #3"
             why = (
                 f"<br><br><b>💡 Why Rank #3:</b><br>"
-                f"Solid option ({t['_score']}/30). "
-                f"{top_score - t['_score']} point(s) behind #1. Best pick if you want a more niche angle."
+                f"Score {t['_score']}/30 — {top_score - t['_score']} pt(s) behind #1. "
+                f"Best for a niche angle."
             )
         else:
             rank_badge = f"📌 Option #{rank}"
@@ -323,14 +349,9 @@ def run_generation_stage(request_id, platform, format_type, pillar):
             f"<br><b>Trend Topic:</b> {t.get('trend_topic', 'N/A')}"
             f"<br><b>Sub-Pillar:</b> {t.get('sub_pillar', 'N/A')}"
             f"{why}"
-            f"<br><br><i>To select: change this subitem's Status → 'Topic Selected'</i>"
+            f"<br><br><i>To select: change Status → 'Topic Selected'</i>"
         )
-        try:
-            monday.query("""mutation($item_id: ID!, $body: String!) { create_update(item_id: $item_id, body: $body) { id } }""", {
-                "item_id": str(sub_id), "body": score_comment
-            })
-        except Exception as e:
-            print(f"   ⚠️ Could not post score comment on subitem: {e}")
+        monday.post_update(str(sub_id), score_comment)
     
     print(f"✅ Created {len(topics)} sub-items (ranked by score, details in comments)!")
     monday.update_status(request_id, "status", "Topics Generated")
@@ -393,7 +414,11 @@ def run_finalization_stage(selected_id):
         print(f"   Topic resolved: {topic}")
         
         payload = generate_full_content(topic)
-        if not payload: return
+        if not payload:
+            print("❌ generate_full_content returned None — aborting finalization")
+            return
+        
+        print(f"   ✅ Content generated. Payload keys: {list(payload.keys())}")
         
         # Create final item in Ready Content with ALL columns filled
         col_values = {"status": {"label": "Ready to Publish"}}
@@ -406,7 +431,7 @@ def run_finalization_stage(selected_id):
         final_id = monday.create_item(MASTER_BOARD_ID, cg["id"], topic["title"], column_values=json.dumps(col_values))
         print(f"   ✅ Created final item ID: {final_id}")
         
-        # Post full generated content as update/comment on the final item
+        # Post full generated content as update/comment — use dedicated method
         content_body = (
             f"<h2>📝 FINAL GENERATED CONTENT</h2>"
             f"<br><b>Platform:</b> {topic.get('platform', 'N/A')} | <b>Format:</b> {topic.get('format', 'N/A')}"
@@ -419,9 +444,8 @@ def run_finalization_stage(selected_id):
             f"<br><br><h3>⚔️ Competitor Insights</h3><br>{payload.get('competitor_insights', '')}"
             f"<br><br><b>🎯 Engagement Score:</b> {payload.get('engagement_score', '?')}/10"
         )
-        monday.query("""mutation($item_id: ID!, $body: String!) { create_update(item_id: $item_id, body: $body) { id } }""", {
-            "item_id": str(final_id), "body": content_body
-        })
+        print(f"   📝 Posting update on final item {final_id}...")
+        monday.post_update(str(final_id), content_body)
         # Lock subitem using its own board ID
         monday.update_status(selected_id, "status", "Content Generated", board_id=sub_board_id)
         # Set parent to Done
