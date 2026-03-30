@@ -258,22 +258,23 @@ def run_generation_stage(request_id, platform, format_type, pillar):
     topics = generate_10_topics(platform, format_type, pillar)
     if not topics: return
     
-    # Sort by composite score and mark top 3
+    # Sort by composite score — highest first
     for t in topics:
         t["_score"] = t.get("trend_score", 0) + t.get("credibility_score", 0) + t.get("virality_score", 0)
     topics.sort(key=lambda x: x["_score"], reverse=True)
+    top_score = topics[0]["_score"]
+    
     for i, t in enumerate(topics):
+        t["_rank"] = i + 1
         if i < 3:
-            t["_rank"] = i + 1
-            print(f"  ⭐ TOP {i+1}: {t['title']} (Score: {t['_score']})")
+            print(f"  ⭐ TOP {i+1}: {t['title']} (Score: {t['_score']}/30)")
     
     monday = MondayAPI(MONDAY_API_KEY)
     for i, t in enumerate(topics):
-        # Prefix top 3 with star and rank
-        prefix = f"⭐#{t['_rank']} " if i < 3 else ""
-        item_name = f"{prefix}{t['title']}"
+        rank = t["_rank"]
         
-        sub_id = monday.create_item(MASTER_BOARD_ID, "", item_name, parent_id=request_id, column_values=json.dumps({
+        # Clean title — NO prefix stars, ranking goes in comment only
+        sub_id = monday.create_item(MASTER_BOARD_ID, "", t["title"], parent_id=request_id, column_values=json.dumps({
             "long_text_mm1wg3xz": {"text": t.get("description", "")},
             "dropdown_mm1wepd4": {"labels": [platform]},
             "dropdown_mm1wppt3": {"labels": [format_type]},
@@ -283,16 +284,46 @@ def run_generation_stage(request_id, platform, format_type, pillar):
             "status": {"label": "Pending Selection"},
         }))
         
-        # Post scores as a comment/update on the subitem
-        rank_label = f"🏆 AI RECOMMENDED #{t['_rank']}" if i < 3 else f"Option #{i+1}"
+        # Build score comment — all ranking info goes here for clarity
+        if rank == 1:
+            rank_badge = "🥇 AI TOP PICK — RANK #1"
+            why = (
+                f"<br><br><b>💡 Why this is ranked #1:</b><br>"
+                f"This topic scores highest overall ({t['_score']}/30) across all 3 dimensions. "
+                f"Trend Score {t.get('trend_score')}/10 shows this topic is currently relevant in the cybersecurity space. "
+                f"Credibility Score {t.get('credibility_score')}/10 means Infinitesol has strong authority to speak on this. "
+                f"Virality Score {t.get('virality_score')}/10 indicates high sharing/engagement potential on {platform}. "
+                f"Combined, this is the strongest content opportunity right now."
+            )
+        elif rank == 2:
+            rank_badge = "🥈 AI RECOMMENDED — RANK #2"
+            why = (
+                f"<br><br><b>💡 Why Rank #2:</b><br>"
+                f"Strong alternative ({t['_score']}/30). "
+                f"{top_score - t['_score']} point(s) behind #1. Good choice if #1 topic feels too broad."
+            )
+        elif rank == 3:
+            rank_badge = "🥉 AI RECOMMENDED — RANK #3"
+            why = (
+                f"<br><br><b>💡 Why Rank #3:</b><br>"
+                f"Solid option ({t['_score']}/30). "
+                f"{top_score - t['_score']} point(s) behind #1. Best pick if you want a more niche angle."
+            )
+        else:
+            rank_badge = f"📌 Option #{rank}"
+            why = ""
+        
         score_comment = (
-            f"<h3>{rank_label}</h3>"
+            f"<h3>{rank_badge}</h3>"
             f"<br><b>📊 Trend Score:</b> {t.get('trend_score', '?')}/10"
             f"<br><b>🛡️ Credibility Score:</b> {t.get('credibility_score', '?')}/10"
             f"<br><b>🚀 Virality Score:</b> {t.get('virality_score', '?')}/10"
             f"<br><b>📈 Total Score:</b> {t.get('_score', 0)}/30"
             f"<br><br><b>Content Angle:</b> {t.get('content_angle', 'N/A')}"
             f"<br><b>Trend Topic:</b> {t.get('trend_topic', 'N/A')}"
+            f"<br><b>Sub-Pillar:</b> {t.get('sub_pillar', 'N/A')}"
+            f"{why}"
+            f"<br><br><i>To select: change this subitem's Status → 'Topic Selected'</i>"
         )
         try:
             monday.query("""mutation($item_id: ID!, $body: String!) { create_update(item_id: $item_id, body: $body) { id } }""", {
@@ -301,7 +332,7 @@ def run_generation_stage(request_id, platform, format_type, pillar):
         except Exception as e:
             print(f"   ⚠️ Could not post score comment on subitem: {e}")
     
-    print(f"✅ Created {len(topics)} sub-items (top 3 marked with ⭐)!")
+    print(f"✅ Created {len(topics)} sub-items (ranked by score, details in comments)!")
     monday.update_status(request_id, "status", "Topics Generated")
 
 def run_finalization_stage(selected_id):
@@ -310,17 +341,17 @@ def run_finalization_stage(selected_id):
     groups = monday.get_board_groups(MASTER_BOARD_ID)
     cg = next((g for g in groups if "Ready" in g["title"] or "Content" in g["title"]), groups[2] if len(groups)>2 else groups[0])
     
-    # FETCH SUBITEM AND PARENT ITEM CONTEXT NATIVELY TO EXTRACT PARENT'S PLATFORM AND FORMAT!
+    # Fetch subitem + parent with exact column IDs
     q = """
     query ($item_id: ID!) {
         items (ids: [$item_id]) {
             name
             board { id }
-            column_values { id text }
+            column_values { id text value }
             parent_item {
                 id
                 name
-                column_values { id text }
+                column_values { id text value }
             }
         }
     }
@@ -329,66 +360,78 @@ def run_finalization_stage(selected_id):
         res = monday.query(q, {"item_id": selected_id})
         si = res["data"]["items"][0]
         pi = si.get("parent_item")
-        sub_board_id = si.get("board", {}).get("id")  # Subitems board ID
+        sub_board_id = si.get("board", {}).get("id")
         
         print(f"   Subitem board: {sub_board_id} | Parent: {pi.get('name') if pi else 'None'}")
         
-        topic = {"title": si["name"], "platform": "", "format": "", "pillar": "", "sub_pillar": "", "content_angle": "", "trend_topic": "", "description": ""}
+        # Build lookup dict for subitem columns: {column_id: text}
+        sub_cols = {c["id"]: (c["text"] or "") for c in si["column_values"]}
+        # Build lookup dict for parent columns
+        par_cols = {c["id"]: (c["text"] or "") for c in pi["column_values"]} if pi else {}
         
-        # Load from subitem columns
-        for c in si["column_values"]:
-            l = c["id"].lower()
-            if "platform" in l: topic["platform"] = c["text"]
-            elif "format" in l: topic["format"] = c["text"]
-            elif "pillar" in l: topic["pillar"] = c["text"]
-            elif "angle" in l or "text" in l: topic["content_angle"] = c["text"]
-            elif "trend" in l or "text1" in l: topic["trend_topic"] = c["text"]
-            elif "description" in l or "long_text" in l: topic["description"] = c["text"]
-            
-        # Overwrite missing platform/format from PARENT item specifically!
-        if pi:
-            for c in pi["column_values"]:
-                l = c["id"].lower()
-                if "platform" in l and not topic["platform"]: topic["platform"] = c["text"]
-                if "format" in l and not topic["format"]: topic["format"] = c["text"]
-                if "pillar" in l and not topic["pillar"]: topic["pillar"] = c["text"]
-                
+        print(f"   Subitem columns: {sub_cols}")
+        print(f"   Parent columns: {par_cols}")
+        
+        # Extract using EXACT column IDs — subitem board IDs
+        topic = {
+            "title":         si["name"],
+            "description":   sub_cols.get("long_text_mm1wg3xz", ""),
+            "platform":      sub_cols.get("dropdown_mm1wepd4", ""),
+            "format":        sub_cols.get("dropdown_mm1wppt3", ""),
+            "sub_pillar":    sub_cols.get("text_mm1wxd4b", ""),
+            "content_angle": sub_cols.get("text_mm1wv8e3", ""),
+            "trend_topic":   sub_cols.get("text_mm1wesed", ""),
+            "pillar":        "",   # comes from parent
+        }
+        
+        # Fill missing fields from parent (main board column IDs)
+        if not topic["platform"]:     topic["platform"]  = par_cols.get("dropdown_mm1w7sd9", "")
+        if not topic["format"]:       topic["format"]    = par_cols.get("dropdown_mm1w72b4", "")
+        topic["pillar"] = par_cols.get("text_mm1w3t2c", "")
+        if not topic["description"]:  topic["description"] = par_cols.get("long_text_mm1wzgth", "")
+        
+        print(f"   Topic resolved: {topic}")
+        
         payload = generate_full_content(topic)
         if not payload: return
         
-        # Create final item with ALL columns filled
-        final_id = monday.create_item(MASTER_BOARD_ID, cg["id"], topic["title"], column_values=json.dumps({
-            "status": {"label": "Ready to Publish"},
-            "dropdown_mm1w7sd9": {"labels": [topic.get("platform")]} if topic.get("platform") else {},
-            "dropdown_mm1w72b4": {"labels": [topic.get("format")]} if topic.get("format") else {},
-            "text_mm1w3t2c": topic.get("pillar", ""),
-            "text_mm1wj52x": topic.get("trend_topic", ""),
-            "long_text_mm1wzgth": {"text": topic.get("description", "")},
-        }))
-        # Post full content as an update/comment on the final item
+        # Create final item in Ready Content with ALL columns filled
+        col_values = {"status": {"label": "Ready to Publish"}}
+        if topic.get("platform"):    col_values["dropdown_mm1w7sd9"]  = {"labels": [topic["platform"]]}
+        if topic.get("format"):      col_values["dropdown_mm1w72b4"]  = {"labels": [topic["format"]]}
+        if topic.get("pillar"):      col_values["text_mm1w3t2c"]      = topic["pillar"]
+        if topic.get("trend_topic"): col_values["text_mm1wj52x"]      = topic["trend_topic"]
+        if topic.get("description"): col_values["long_text_mm1wzgth"] = {"text": topic["description"]}
+        
+        final_id = monday.create_item(MASTER_BOARD_ID, cg["id"], topic["title"], column_values=json.dumps(col_values))
+        print(f"   ✅ Created final item ID: {final_id}")
+        
+        # Post full generated content as update/comment on the final item
         content_body = (
             f"<h2>📝 FINAL GENERATED CONTENT</h2>"
             f"<br><b>Platform:</b> {topic.get('platform', 'N/A')} | <b>Format:</b> {topic.get('format', 'N/A')}"
-            f"<br><b>Pillar:</b> {topic.get('pillar', 'N/A')} ({topic.get('sub_pillar', '')})"
+            f"<br><b>Pillar:</b> {topic.get('pillar', 'N/A')} | <b>Sub-Pillar:</b> {topic.get('sub_pillar', 'N/A')}"
             f"<br><b>Trend:</b> {topic.get('trend_topic', 'N/A')}"
+            f"<br><b>Content Angle:</b> {topic.get('content_angle', 'N/A')}"
             f"<br><br><h3>📄 Post Content</h3><br>{payload.get('content', '')}"
             f"<br><br><h3>🎣 Alternative Hooks</h3><br>{payload.get('hooks', '')}"
             f"<br><br><h3>🔑 Keywords</h3><br>{payload.get('keywords', '')}"
             f"<br><br><h3>⚔️ Competitor Insights</h3><br>{payload.get('competitor_insights', '')}"
-            f"<br><br><b>Engagement Score:</b> {payload.get('engagement_score', '?')}/10"
+            f"<br><br><b>🎯 Engagement Score:</b> {payload.get('engagement_score', '?')}/10"
         )
-        monday.query("""mutation($item_id: ID!, $body: String!) { create_update (item_id: $item_id, body: $body) { id } }""", {
-            "item_id": str(final_id),
-            "body": content_body
+        monday.query("""mutation($item_id: ID!, $body: String!) { create_update(item_id: $item_id, body: $body) { id } }""", {
+            "item_id": str(final_id), "body": content_body
         })
-        # Update SUBITEM status using its own board ID
+        # Lock subitem using its own board ID
         monday.update_status(selected_id, "status", "Content Generated", board_id=sub_board_id)
-        # Update PARENT status using the main board ID
+        # Set parent to Done
         if pi:
-             monday.update_status(pi["id"], "status", "Done")
+            monday.update_status(pi["id"], "status", "Done")
         print("✅ Content perfectly mapped to Monday!")
     except Exception as e:
-        print(f"❌ Could not pull specific subitem from graph: {e}")
+        import traceback
+        print(f"❌ Could not finalize content: {e}")
+        traceback.print_exc()
 def run_poll_stage():
     """Poll Monday.com board for status changes and react accordingly.
     
