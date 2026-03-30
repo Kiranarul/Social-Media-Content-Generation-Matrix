@@ -84,14 +84,15 @@ class MondayAPI:
             }"""
             return self.query(q, {"board_id": board_id, "group_id": group_id, "item_name": item_name, "column_values": column_values or "{}"})["data"]["create_item"]["id"]
     
-    def update_column_value(self, item_id, column_id, value):
+    def update_column_value(self, item_id, column_id, value, board_id=None):
+        bid = board_id or MASTER_BOARD_ID
         q = """mutation($board_id: ID!, $item_id: ID!, $column_id: String!, $value: JSON!) {
             change_column_value(board_id: $board_id, item_id: $item_id, column_id: $column_id, value: $value) { id }
         }"""
-        return self.query(q, {"board_id": MASTER_BOARD_ID, "item_id": str(item_id), "column_id": column_id, "value": json.dumps(value)})["data"]["change_column_value"]["id"]
+        return self.query(q, {"board_id": bid, "item_id": str(item_id), "column_id": column_id, "value": json.dumps(value)})["data"]["change_column_value"]["id"]
     
-    def update_status(self, item_id, column_id, status_label):
-        return self.update_column_value(item_id, column_id, {"label": status_label})
+    def update_status(self, item_id, column_id, status_label, board_id=None):
+        return self.update_column_value(item_id, column_id, {"label": status_label}, board_id=board_id)
 
 class ContentStrategyAI:
     def __init__(self, monday_api, board_id):
@@ -225,10 +226,29 @@ def run_generation_stage(request_id, platform, format_type, pillar):
     topics = generate_10_topics(platform, format_type, pillar)
     if not topics: return
     
-    monday = MondayAPI(MONDAY_API_KEY)
+    # Sort by composite score and mark top 3
     for t in topics:
-        monday.create_item(MASTER_BOARD_ID, "", t["title"], parent_id=request_id, column_values=json.dumps({
-            "long_text_mm1wg3xz": {"text": t.get("description", "")},
+        t["_score"] = t.get("trend_score", 0) + t.get("credibility_score", 0) + t.get("virality_score", 0)
+    topics.sort(key=lambda x: x["_score"], reverse=True)
+    for i, t in enumerate(topics):
+        if i < 3:
+            t["_rank"] = i + 1
+            print(f"  ⭐ TOP {i+1}: {t['title']} (Score: {t['_score']})")
+    
+    monday = MondayAPI(MONDAY_API_KEY)
+    for i, t in enumerate(topics):
+        # Prefix top 3 with star and rank
+        prefix = f"⭐#{t['_rank']} " if i < 3 else ""
+        item_name = f"{prefix}{t['title']}"
+        
+        # Build description with scores for transparency
+        desc = t.get("description", "")
+        scores = f"\n\n📊 Scores — Trend: {t.get('trend_score', '?')}/10 | Credibility: {t.get('credibility_score', '?')}/10 | Virality: {t.get('virality_score', '?')}/10 | Total: {t.get('_score', 0)}/30"
+        if i < 3:
+            scores += "\n🏆 AI TOP 3 RECOMMENDATION"
+        
+        monday.create_item(MASTER_BOARD_ID, "", item_name, parent_id=request_id, column_values=json.dumps({
+            "long_text_mm1wg3xz": {"text": desc + scores},
             "dropdown_mm1wepd4": {"labels": [platform]},
             "dropdown_mm1wppt3": {"labels": [format_type]},
             "text_mm1wxd4b": t.get("sub_pillar", ""),
@@ -236,7 +256,7 @@ def run_generation_stage(request_id, platform, format_type, pillar):
             "text_mm1wesed": t.get("trend_topic", ""),
             "status": {"label": "Pending Selection"},
         }))
-    print(f"✅ Created {len(topics)} sub-items successfully!")
+    print(f"✅ Created {len(topics)} sub-items (top 3 marked with ⭐)!")
     monday.update_status(request_id, "status", "Topics Generated")
 
 def run_finalization_stage(selected_id):
@@ -308,6 +328,7 @@ def run_poll_stage():
     monday = MondayAPI(MONDAY_API_KEY)
     
     # Fetch ALL items from the board with their subitems in one query
+    # Include board { id } on subitems so we know which board they belong to
     q = """
     query($board_id: ID!) {
         boards(ids: [$board_id]) {
@@ -320,6 +341,7 @@ def run_poll_stage():
                         id
                         name
                         column_values { id text value }
+                        board { id }
                     }
                 }
             }
@@ -379,13 +401,16 @@ def run_poll_stage():
                 sub_cols[c["id"]] = c["text"] or ""
             
             sub_status = sub_cols.get("status", "")
+            # Get the subitems board ID (different from main board!)
+            sub_board_id = sub.get("board", {}).get("id")
             
             if sub_status == "Topic Selected":
-                print(f"\n🎯 FOUND: Subitem '{sub['name']}' (ID: {sub['id']}) → Status: Topic Selected")
+                print(f"\n🎯 FOUND: Subitem '{sub['name']}' (ID: {sub['id']}, Board: {sub_board_id}) → Status: Topic Selected")
                 
                 # First set subitem status to prevent re-processing
+                # Must use the SUBITEMS board ID, not the parent board ID!
                 try:
-                    monday.update_status(sub["id"], "status", "Content Generated")
+                    monday.update_status(sub["id"], "status", "Content Generated", board_id=sub_board_id)
                     print(f"   ⏳ Subitem status set to 'Content Generated' (lock acquired)")
                 except Exception as e:
                     print(f"   ⚠️ Could not lock subitem status: {e}")
