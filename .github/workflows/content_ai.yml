@@ -23,6 +23,10 @@ jobs:
   # -----------------------------------------------------------------
   # POLL JOB — runs a 60-second loop for 5h50m, then re-triggers itself.
   # Self-chains via GitHub API so it runs 24/7 with no external services.
+  #
+  # CONCURRENCY GUARD: Only ONE poll run may be active at a time.
+  # If a cron fires while a self-chained dispatch is already running,
+  # the NEW run is cancelled — the live run keeps going uninterrupted.
   # -----------------------------------------------------------------
   poll-and-react:
     if: |
@@ -31,6 +35,13 @@ jobs:
       (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == '')
     runs-on: ubuntu-latest
     timeout-minutes: 360   # 6-hour hard limit (GitHub Actions max)
+
+    # ── Prevent duplicate concurrent poll loops ──────────────────────
+    # cancel-in-progress: false  →  the INCOMING run is cancelled,
+    #                               the currently-running run is untouched.
+    concurrency:
+      group: monday-poll-loop
+      cancel-in-progress: false
 
     steps:
       - uses: actions/checkout@v4
@@ -91,6 +102,8 @@ jobs:
           echo "================================================================"
 
           # Self-trigger: dispatch a new workflow_dispatch run for the next cycle
+          # The concurrency guard above ensures this won't double-up even if the
+          # cron also fires at the same time.
           HTTP_STATUS=$(curl -s -o /tmp/gh_response.txt -w "%{http_code}" \
             -X POST \
             -H "Accept: application/vnd.github+json" \
@@ -110,11 +123,16 @@ jobs:
   # -----------------------------------------------------------------
   # RECOMMEND JOB — manual only. Run from GitHub → Actions → Run workflow
   # → select 'recommend'. Posts AI suggestion to Monday with status=Done.
+  # Uses its own concurrency group — never blocked by poll runs.
   # -----------------------------------------------------------------
   daily-recommend:
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'recommend'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+
+    concurrency:
+      group: monday-recommend
+      cancel-in-progress: true   # OK to cancel recommend if manually re-triggered
 
     steps:
       - uses: actions/checkout@v4
