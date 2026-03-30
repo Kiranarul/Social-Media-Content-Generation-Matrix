@@ -276,9 +276,9 @@ def run_recommendation_stage():
         "dropdown_mm1w72b4": {"labels": [rec.get("format")]},
         "text_mm1w3t2c": rec.get("pillar", ""),
         "long_text_mm1wzgth": {"text": rec.get("reasoning", "")},
-        "status": {"label": "Ready to Generate"}
+        "status": {"label": "Done"}  # Human must manually set 'Ready to Generate' to proceed
     }))
-    print(f"✅ Posted (Item ID: {item_id})")
+    print(f"✅ AI Recommendation posted (Item ID: {item_id}) — status set to Done. Change to 'Ready to Generate' to trigger topic generation.")
 
 def run_generation_stage(request_id, platform, format_type, pillar):
     print("=== PHASE 2: Topic Generation ===")

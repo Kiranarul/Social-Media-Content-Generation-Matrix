@@ -2,12 +2,11 @@ name: Monday AI Content Factory
 
 on:
   schedule:
-    - cron: '*/5 * * * *'    # Poll every 5 minutes for status changes
-    - cron: '0 13 * * 1'     # Weekly recommendation every Monday 9AM EST
+    - cron: '*/5 * * * *'    # Poll every 5 minutes (small delays/queuing is fine)
   workflow_dispatch:          # Manual trigger from GitHub UI
     inputs:
       mode:
-        description: 'What to run'
+        description: 'What to run: poll or recommend'
         required: true
         default: 'poll'
         type: choice
@@ -16,19 +15,28 @@ on:
           - recommend
 
 jobs:
-  # POLLING JOB: Scans Monday.com board and reacts to status changes
+  # -----------------------------------------------------------------
+  # POLL JOB — runs every 5 min via cron OR when manually dispatched
+  # as 'poll'. Scans Monday.com and reacts to status changes.
+  # NOTE: no 'if' guard on schedule — GitHub cron is unreliable when
+  # multiple schedules share a single workflow. Single schedule = works.
+  # -----------------------------------------------------------------
   poll-and-react:
-    if: >-
-      github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'poll' ||
-      github.event.schedule == '*/5 * * * *'
+    if: |
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'poll')
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
       - name: Install dependencies
         run: pip install -r requirements.txt
+
       - name: Poll Monday.com for pending actions
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -36,19 +44,27 @@ jobs:
           MASTER_BOARD_ID: ${{ secrets.MASTER_BOARD_ID }}
         run: python ai_engine.py poll
 
-  # WEEKLY RECOMMENDATION: AI suggests what to post next
-  weekly-recommend:
-    if: >-
-      github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'recommend' ||
-      github.event.schedule == '0 13 * * 1'
+  # -----------------------------------------------------------------
+  # RECOMMEND JOB — only runs when manually dispatched as 'recommend'.
+  # AI generates the next content suggestion and posts it to Monday
+  # with status = Done (human must flip to Ready to Generate).
+  # Run this manually once a day/week from GitHub Actions → Run workflow.
+  # -----------------------------------------------------------------
+  daily-recommend:
+    if: |
+      github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'recommend'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
       - name: Install dependencies
         run: pip install -r requirements.txt
+
       - name: Generate AI Strategy Recommendation
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
