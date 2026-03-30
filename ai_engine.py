@@ -106,10 +106,16 @@ class ContentStrategyAI:
         return self.monday.get_board_groups(self.board_id)
     
     def _load_history(self):
-        hg = next((g for g in self.groups if "history" in g["title"].lower() or "archive" in g["title"].lower()), None)
-        if not hg: return []
-        try: return self.monday.get_group_items(self.board_id, hg["id"])
-        except: return []
+        """Load items from ALL groups to understand what's already been created/processed."""
+        all_items = []
+        for g in self.groups:
+            try:
+                items = self.monday.get_group_items(self.board_id, g["id"])
+                all_items.extend(items)
+            except:
+                pass
+        print(f"   📊 Recommendation engine loaded {len(all_items)} items across {len(self.groups)} groups")
+        return all_items
     
     def _load_reference_data(self):
         if not os.path.exists(REFERENCE_DATA_FILE): return {}
@@ -241,14 +247,8 @@ def run_generation_stage(request_id, platform, format_type, pillar):
         prefix = f"⭐#{t['_rank']} " if i < 3 else ""
         item_name = f"{prefix}{t['title']}"
         
-        # Build description with scores for transparency
-        desc = t.get("description", "")
-        scores = f"\n\n📊 Scores — Trend: {t.get('trend_score', '?')}/10 | Credibility: {t.get('credibility_score', '?')}/10 | Virality: {t.get('virality_score', '?')}/10 | Total: {t.get('_score', 0)}/30"
-        if i < 3:
-            scores += "\n🏆 AI TOP 3 RECOMMENDATION"
-        
-        monday.create_item(MASTER_BOARD_ID, "", item_name, parent_id=request_id, column_values=json.dumps({
-            "long_text_mm1wg3xz": {"text": desc + scores},
+        sub_id = monday.create_item(MASTER_BOARD_ID, "", item_name, parent_id=request_id, column_values=json.dumps({
+            "long_text_mm1wg3xz": {"text": t.get("description", "")},
             "dropdown_mm1wepd4": {"labels": [platform]},
             "dropdown_mm1wppt3": {"labels": [format_type]},
             "text_mm1wxd4b": t.get("sub_pillar", ""),
@@ -256,6 +256,25 @@ def run_generation_stage(request_id, platform, format_type, pillar):
             "text_mm1wesed": t.get("trend_topic", ""),
             "status": {"label": "Pending Selection"},
         }))
+        
+        # Post scores as a comment/update on the subitem
+        rank_label = f"🏆 AI RECOMMENDED #{t['_rank']}" if i < 3 else f"Option #{i+1}"
+        score_comment = (
+            f"<h3>{rank_label}</h3>"
+            f"<br><b>📊 Trend Score:</b> {t.get('trend_score', '?')}/10"
+            f"<br><b>🛡️ Credibility Score:</b> {t.get('credibility_score', '?')}/10"
+            f"<br><b>🚀 Virality Score:</b> {t.get('virality_score', '?')}/10"
+            f"<br><b>📈 Total Score:</b> {t.get('_score', 0)}/30"
+            f"<br><br><b>Content Angle:</b> {t.get('content_angle', 'N/A')}"
+            f"<br><b>Trend Topic:</b> {t.get('trend_topic', 'N/A')}"
+        )
+        try:
+            monday.query("""mutation($item_id: ID!, $body: String!) { create_update(item_id: $item_id, body: $body) { id } }""", {
+                "item_id": str(sub_id), "body": score_comment
+            })
+        except Exception as e:
+            print(f"   ⚠️ Could not post score comment on subitem: {e}")
+    
     print(f"✅ Created {len(topics)} sub-items (top 3 marked with ⭐)!")
     monday.update_status(request_id, "status", "Topics Generated")
 
@@ -270,8 +289,10 @@ def run_finalization_stage(selected_id):
     query ($item_id: ID!) {
         items (ids: [$item_id]) {
             name
+            board { id }
             column_values { id text }
             parent_item {
+                id
                 name
                 column_values { id text }
             }
@@ -282,6 +303,9 @@ def run_finalization_stage(selected_id):
         res = monday.query(q, {"item_id": selected_id})
         si = res["data"]["items"][0]
         pi = si.get("parent_item")
+        sub_board_id = si.get("board", {}).get("id")  # Subitems board ID
+        
+        print(f"   Subitem board: {sub_board_id} | Parent: {pi.get('name') if pi else 'None'}")
         
         topic = {"title": si["name"], "platform": "", "format": "", "pillar": "", "sub_pillar": "", "content_angle": "", "trend_topic": "", "description": ""}
         
@@ -306,12 +330,34 @@ def run_finalization_stage(selected_id):
         payload = generate_full_content(topic)
         if not payload: return
         
-        final_id = monday.create_item(MASTER_BOARD_ID, cg["id"], topic["title"], column_values=json.dumps({"status": {"label": "Ready to Publish"}}))
+        # Create final item with ALL columns filled
+        final_id = monday.create_item(MASTER_BOARD_ID, cg["id"], topic["title"], column_values=json.dumps({
+            "status": {"label": "Ready to Publish"},
+            "dropdown_mm1w7sd9": {"labels": [topic.get("platform")]} if topic.get("platform") else {},
+            "dropdown_mm1w72b4": {"labels": [topic.get("format")]} if topic.get("format") else {},
+            "text_mm1w3t2c": topic.get("pillar", ""),
+            "text_mm1wj52x": topic.get("trend_topic", ""),
+            "long_text_mm1wzgth": {"text": topic.get("description", "")},
+        }))
+        # Post full content as an update/comment on the final item
+        content_body = (
+            f"<h2>📝 FINAL GENERATED CONTENT</h2>"
+            f"<br><b>Platform:</b> {topic.get('platform', 'N/A')} | <b>Format:</b> {topic.get('format', 'N/A')}"
+            f"<br><b>Pillar:</b> {topic.get('pillar', 'N/A')} ({topic.get('sub_pillar', '')})"
+            f"<br><b>Trend:</b> {topic.get('trend_topic', 'N/A')}"
+            f"<br><br><h3>📄 Post Content</h3><br>{payload.get('content', '')}"
+            f"<br><br><h3>🎣 Alternative Hooks</h3><br>{payload.get('hooks', '')}"
+            f"<br><br><h3>🔑 Keywords</h3><br>{payload.get('keywords', '')}"
+            f"<br><br><h3>⚔️ Competitor Insights</h3><br>{payload.get('competitor_insights', '')}"
+            f"<br><br><b>Engagement Score:</b> {payload.get('engagement_score', '?')}/10"
+        )
         monday.query("""mutation($item_id: ID!, $body: String!) { create_update (item_id: $item_id, body: $body) { id } }""", {
             "item_id": str(final_id),
-            "body": f"<h2>FINAL GENERATED CONTENT</h2><br><b>Post:</b><br>{payload.get('content', '')}<br><br><b>Hooks:</b><br>{payload.get('hooks', '')}"
+            "body": content_body
         })
-        monday.update_status(selected_id, "status", "Topic Selected")
+        # Update SUBITEM status using its own board ID
+        monday.update_status(selected_id, "status", "Content Generated", board_id=sub_board_id)
+        # Update PARENT status using the main board ID
         if pi:
              monday.update_status(pi["id"], "status", "Done")
         print("✅ Content perfectly mapped to Monday!")
