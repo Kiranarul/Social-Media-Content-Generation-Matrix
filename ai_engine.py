@@ -126,30 +126,56 @@ class ContentStrategyAI:
         }
     
     def recommend_next_post(self):
+        # Column ID mapping (must match Monday board column IDs, NOT display names)
+        PLATFORM_COL = "dropdown_mm1w7sd9"
+        FORMAT_COL = "dropdown_mm1w72b4"
+        PILLAR_COL = "text_mm1w3t2c"
+        
         pl, fm, pi = [], [], []
         for i in self.history:
-            pl.append(i.get("Platform", ""))
-            fm.append(i.get("Format", ""))
-            pi.append(i.get("Pillar", ""))
+            p = i.get(PLATFORM_COL, "")
+            f = i.get(FORMAT_COL, "")
+            pil = i.get(PILLAR_COL, "")
+            if p: pl.append(p)
+            if f: fm.append(f)
+            if pil: pi.append(pil)
+        
+        print(f"   📊 History analysis: {len(pl)} platforms, {len(fm)} formats, {len(pi)} pillars found")
+        print(f"   📊 Platforms used: {Counter(pl)}")
+        print(f"   📊 Formats used: {Counter(fm)}")
+        print(f"   📊 Pillars used: {Counter(pi)}")
             
-        pc, fc = Counter([p for p in pl if p]), Counter([f for f in fm if f])
+        pc, fc = Counter(pl), Counter(fm)
         
         all_pl = ["LinkedIn", "Instagram", "Twitter", "Facebook"]
         all_fm = ["Post", "Carousel", "Reel", "Video", "Poll", "Story"]
         apil = self.ref.get("pillars", pd.DataFrame())
         all_pi = apil["Pillar"].unique().tolist() if not apil.empty and "Pillar" in apil.columns else []
         
-        m_pl = pc.most_common(1)[0][0] if pc else None
-        m_fm = fc.most_common(1)[0][0] if fc else None
+        # Pick LEAST used platform (or unused one first)
+        unused_pl = [p for p in all_pl if p not in pc]
+        if unused_pl:
+            r_pl = unused_pl[0]
+        else:
+            r_pl = pc.most_common()[-1][0]  # least used
         
-        r_pl = next((p for p in all_pl if p != m_pl), all_pl[0])
-        r_fm = next((f for f in all_fm if f != m_fm), all_fm[0])
+        # Pick LEAST used format
+        unused_fm = [f for f in all_fm if f not in fc]
+        if unused_fm:
+            r_fm = unused_fm[0]
+        else:
+            r_fm = fc.most_common()[-1][0]  # least used
+        
+        # Pick unused pillar
         r_pi = next((p for p in all_pi if p not in pi), all_pi[0] if all_pi else "General")
         
         rs = []
         if pc.get(r_pl, 0) == 0: rs.append(f"Never posted on {r_pl}")
-        if pc.get(r_pl, 0) < 3: rs.append(f"Only {pc.get(r_pl, 0)} posts on {r_pl}")
+        else: rs.append(f"Only {pc.get(r_pl, 0)} posts on {r_pl}")
         if r_fm not in fc: rs.append(f"Haven't tried {r_fm} recently")
+        if r_pi not in pi: rs.append(f"Pillar '{r_pi}' not yet covered")
+        
+        print(f"   🎯 Recommending: {r_pl} / {r_fm} / {r_pi}")
         
         return {
             "platform": r_pl, "format": r_fm, "pillar": r_pi,
