@@ -297,14 +297,123 @@ def run_finalization_stage(selected_id):
         print("✅ Content perfectly mapped to Monday!")
     except Exception as e:
         print(f"❌ Could not pull specific subitem from graph: {e}")
+def run_poll_stage():
+    """Poll Monday.com board for status changes and react accordingly.
+    
+    Scans for:
+    1. Items with status 'Ready to Generate' → triggers Phase 2 (topic generation)
+    2. Subitems with status 'Topic Selected' → triggers Phase 3 (content finalization)
+    """
+    print("=== POLLING: Scanning Monday.com board for pending actions ===")
+    monday = MondayAPI(MONDAY_API_KEY)
+    
+    # Fetch ALL items from the board with their subitems in one query
+    q = """
+    query($board_id: ID!) {
+        boards(ids: [$board_id]) {
+            items_page(limit: 100) {
+                items {
+                    id
+                    name
+                    column_values { id text value }
+                    subitems {
+                        id
+                        name
+                        column_values { id text value }
+                    }
+                }
+            }
+        }
+    }
+    """
+    try:
+        res = monday.query(q, {"board_id": MASTER_BOARD_ID})
+    except Exception as e:
+        print(f"❌ Failed to query board: {e}")
+        return
+    
+    items = res["data"]["boards"][0]["items_page"]["items"]
+    print(f"📋 Found {len(items)} items on the board")
+    
+    actions_taken = 0
+    
+    for item in items:
+        item_id = item["id"]
+        item_name = item["name"]
+        
+        # Extract column values into a dict
+        cols = {}
+        for c in item["column_values"]:
+            cols[c["id"]] = c["text"] or ""
+        
+        item_status = cols.get("status", "")
+        
+        # --- PHASE 2 TRIGGER: Item has "Ready to Generate" status ---
+        if item_status == "Ready to Generate":
+            print(f"\n🔥 FOUND: '{item_name}' (ID: {item_id}) → Status: Ready to Generate")
+            
+            # Extract platform, format, pillar from the item's columns
+            platform = cols.get("dropdown_mm1w7sd9", "") or "LinkedIn"
+            format_type = cols.get("dropdown_mm1w72b4", "") or "Post"
+            pillar = cols.get("text_mm1w3t2c", "") or "General"
+            
+            print(f"   Platform: {platform} | Format: {format_type} | Pillar: {pillar}")
+            
+            # First set status to "Selecting Topic" to prevent re-processing on next poll
+            try:
+                monday.update_status(item_id, "status", "Selecting Topic")
+                print(f"   ⏳ Status set to 'Selecting Topic' (lock acquired)")
+            except Exception as e:
+                print(f"   ⚠️ Could not lock item status: {e}")
+                continue
+            
+            # Now generate topics
+            run_generation_stage(item_id, platform, format_type, pillar)
+            actions_taken += 1
+        
+        # --- PHASE 3 TRIGGER: Check subitems for "Topic Selected" status ---
+        subitems = item.get("subitems", [])
+        for sub in subitems:
+            sub_cols = {}
+            for c in sub["column_values"]:
+                sub_cols[c["id"]] = c["text"] or ""
+            
+            sub_status = sub_cols.get("status", "")
+            
+            if sub_status == "Topic Selected":
+                print(f"\n🎯 FOUND: Subitem '{sub['name']}' (ID: {sub['id']}) → Status: Topic Selected")
+                
+                # First set subitem status to prevent re-processing
+                try:
+                    monday.update_status(sub["id"], "status", "Content Generated")
+                    print(f"   ⏳ Subitem status set to 'Content Generated' (lock acquired)")
+                except Exception as e:
+                    print(f"   ⚠️ Could not lock subitem status: {e}")
+                    continue
+                
+                run_finalization_stage(sub["id"])
+                actions_taken += 1
+    
+    if actions_taken == 0:
+        print("\n✅ No pending actions found. Board is up to date!")
+    else:
+        print(f"\n🚀 Completed {actions_taken} action(s) this poll cycle!")
+
 
 def main():
     import sys
-    if len(sys.argv) < 2: sys.exit(1)
+    if len(sys.argv) < 2:
+        print("Usage: python ai_engine.py [recommend|generate|finalize|poll]")
+        sys.exit(1)
     st = sys.argv[1]
     if st == "recommend": run_recommendation_stage()
     elif st == "generate": run_generation_stage(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5])
     elif st == "finalize": run_finalization_stage(sys.argv[2])
+    elif st == "poll": run_poll_stage()
+    else:
+        print(f"❌ Unknown command: {st}")
+        print("Available commands: recommend, generate, finalize, poll")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

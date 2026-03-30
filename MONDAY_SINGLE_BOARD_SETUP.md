@@ -55,7 +55,10 @@ Under any item, add a Subitem. Then add these columns to the Subitem layer so th
 
 ---
 
-## Step 4: Create Critical Automations
+## Step 4: Create Monday.com Automations (Only 2 Needed!)
+
+> [!TIP]
+> No webhooks required! GitHub Actions polls your board every 5 minutes automatically.
 
 ### Automation A: Movement to Options
 ```
@@ -69,66 +72,52 @@ WHEN Status changes to "Done"
 THEN Move item to "📚 History" group
 ```
 
-### Automation C: Webhook Phase 1 (Target Search)
-```
-WHEN Status changes to "Ready to Generate"
-THEN Send webhook
-     URL: https://api.github.com/repos/Kiranarul/Social-Media-Content-Generation-Matrix/dispatches
-     Event: monday-start-generation
-     Payload: {
-       "request_item_id": "{{item.id}}",
-       "platform": "{{Platform}}",
-       "format": "{{Format}}",
-       "pillar": "{{Topic Pillar}}"
-     }
-```
-
-### Automation D: Webhook Phase 2 (Content Finalization)
-```
-WHEN Subitem Status changes to "Topic Selected"
-THEN Send webhook
-     URL: https://api.github.com/repos/Kiranarul/Social-Media-Content-Generation-Matrix/dispatches
-     Event: monday-topic-selected
-     Payload: {
-       "selected_item_id": "{{item.id}}"
-     }
-```
-
-> [!NOTE]
-> *Because our upgraded Python backend uses Monday.com's native GraphQL recursively, you do NOT need to pass the parent item ID in the webhook! The AI finds everything automatically just using `item.id`.*
-
 ---
 
-## Step 5: Extract Your Board ID
+## Step 5: Configure GitHub Secrets
 
 1. Open your "AI Content Factory" board
 2. Look at URL: `https://app.monday.com/boards/1234567890`
 3. Copy the number (e.g., `1234567890`)
-4. Add to your GitHub Actions Secrets panel as `MASTER_BOARD_ID`.
+4. Go to your GitHub repo → **Settings** → **Secrets and variables** → **Actions**
+5. Add these 3 secrets:
+
+| Secret Name | Value |
+|-------------|-------|
+| `MASTER_BOARD_ID` | Your board ID number |
+| `MONDAY_API_KEY` | Your Monday.com API token |
+| `GEMINI_API_KEY` | Your Google Gemini API key |
 
 ---
 
-## System Deployment Workflow
+## How It Works (Poll-Based Architecture)
+
+GitHub Actions runs every **5 minutes**, scanning your Monday board for status changes.
 
 **You:**
 1. Click "+ Add Item" in "📥 Active Requests" group.
-2. Change Status → `Ready to Generate`
+2. Fill in **Platform**, **Format**, and optionally **Topic Pillar**.
+3. Change Status → `Ready to Generate`
 
-**System:**
-- Sends Webhook `monday-start-generation`.
-- GitHub action executes Phase 2. Natively generates 10 beautiful subitems under your request!
-- System changes Parent Status to `Topics Generated`.
-- *Automation A immediately moves the Parent to "💡 Topic Options".*
+**System (within 5 minutes):**
+- GitHub Actions detects the status change.
+- Locks the item by setting status to `Selecting Topic`.
+- Generates 10 topic subitems under your request.
+- Sets parent status to `Topics Generated`.
+- *Automation A moves the parent to "💡 Topic Options".*
 
 **You:**
 - Review the 10 subitems!
 - Select the ONE you want and change its status to `Topic Selected`
 
-**System:**
-- Sends Webhook `monday-topic-selected`.
-- Github action executes Phase 3.
-- Recursively matches subitem to parent, constructs incredible final post Markdown, and pushes it to a brand new item.
-- System sets NEW item to `Ready to Publish`.
-- System sets Subitem to `Content Generated`.
-- System sets PARENT item to `Done`.
-- *Automation B immediately moves the exhausted Parent directly into "📚 History" Archive!*
+**System (within 5 minutes):**
+- GitHub Actions detects the subitem status change.
+- Generates the full content post using AI.
+- Creates a new item in "✅ Ready Content" with status `Ready to Publish`.
+- Saves the full markdown post in the item's Updates section.
+- Sets parent item to `Done`.
+- *Automation B moves the parent to "📚 History".*
+
+> [!NOTE]
+> You can also trigger manually from GitHub: **Actions** tab → **Monday AI Content Factory** → **Run workflow** → Choose `poll` or `recommend`.
+
