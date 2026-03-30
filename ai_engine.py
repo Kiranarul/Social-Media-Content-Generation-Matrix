@@ -85,10 +85,10 @@ class MondayAPI:
             return self.query(q, {"board_id": board_id, "group_id": group_id, "item_name": item_name, "column_values": column_values or "{}"})["data"]["create_item"]["id"]
     
     def update_column_value(self, item_id, column_id, value):
-        q = """mutation($item_id: ID!, $column_id: String!, $value: JSON!) {
-            change_column_value(item_id: $item_id, column_id: $column_id, value: $value) { id }
+        q = """mutation($board_id: ID!, $item_id: ID!, $column_id: String!, $value: JSON!) {
+            change_column_value(board_id: $board_id, item_id: $item_id, column_id: $column_id, value: $value) { id }
         }"""
-        return self.query(q, {"item_id": str(item_id), "column_id": column_id, "value": json.dumps(value)})["data"]["change_column_value"]["id"]
+        return self.query(q, {"board_id": MASTER_BOARD_ID, "item_id": str(item_id), "column_id": column_id, "value": json.dumps(value)})["data"]["change_column_value"]["id"]
     
     def update_status(self, item_id, column_id, status_label):
         return self.update_column_value(item_id, column_id, {"label": status_label})
