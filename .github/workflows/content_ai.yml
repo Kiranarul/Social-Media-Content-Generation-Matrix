@@ -2,8 +2,8 @@ name: Monday AI Content Factory
 
 on:
   schedule:
-    - cron: '*/5 * * * *'    # Poll every 5 minutes (small delays/queuing is fine)
-  workflow_dispatch:          # Manual trigger from GitHub UI
+    - cron: '0 */6 * * *'    # Safety net: fires every 6h in case self-chain breaks
+  workflow_dispatch:
     inputs:
       mode:
         description: 'What to run: poll or recommend'
@@ -14,19 +14,24 @@ on:
           - poll
           - recommend
 
+# Allow the workflow to trigger itself
+permissions:
+  actions: write
+  contents: read
+
 jobs:
   # -----------------------------------------------------------------
-  # POLL JOB — runs every 5 min via cron OR when manually dispatched
-  # as 'poll'. Scans Monday.com and reacts to status changes.
-  # NOTE: no 'if' guard on schedule — GitHub cron is unreliable when
-  # multiple schedules share a single workflow. Single schedule = works.
+  # POLL JOB — runs a 60-second loop for 5h50m, then re-triggers itself.
+  # Self-chains via GitHub API so it runs 24/7 with no external services.
   # -----------------------------------------------------------------
   poll-and-react:
     if: |
       github.event_name == 'schedule' ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'poll')
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'poll') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == '')
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 360   # 6-hour hard limit (GitHub Actions max)
+
     steps:
       - uses: actions/checkout@v4
 
@@ -37,43 +42,80 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Aggressive poll loop — runs every 30s for 9 minutes
+      - name: Poll loop — every 60s for 5h50m then self-restart
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           MONDAY_API_KEY: ${{ secrets.MONDAY_API_KEY }}
           MASTER_BOARD_ID: ${{ secrets.MASTER_BOARD_ID }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
         run: |
-          END=$((SECONDS + 540))   # 9 minutes = 540 seconds (leaves 60s buffer before timeout-minutes: 10)
+          WINDOW=21000          # 5h50m = 21000 seconds
+          INTERVAL=60           # Poll every 60 seconds
+          END=$((SECONDS + WINDOW))
           ITERATION=0
+
+          echo "🚀 Starting poll loop | Window: ${WINDOW}s | Interval: ${INTERVAL}s"
+          echo "⏰ Started at: $(date '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "⏰ Will hand off at: $(date -d "+${WINDOW} seconds" '+%Y-%m-%d %H:%M:%S UTC' 2>/dev/null || date '+%Y-%m-%d %H:%M:%S UTC')"
+
           while [ $SECONDS -lt $END ]; do
             ITERATION=$((ITERATION + 1))
+            ELAPSED=$SECONDS
+            REMAINING=$((END - ELAPSED))
+            ELAPSED_FMT=$(printf '%02dh:%02dm:%02ds' $((ELAPSED/3600)) $((ELAPSED%3600/60)) $((ELAPSED%60)))
+            REMAIN_FMT=$(printf '%02dh:%02dm:%02ds' $((REMAINING/3600)) $((REMAINING%3600/60)) $((REMAINING%60)))
+
             echo ""
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "🔄 Poll iteration #$ITERATION | $(date '+%H:%M:%S') | ${SECONDS}s elapsed"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            python ai_engine.py poll || echo "⚠️  Poll returned non-zero exit — continuing loop"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "🔄 Iteration #${ITERATION} | $(date '+%H:%M:%S') | Elapsed: ${ELAPSED_FMT} | Remaining: ${REMAIN_FMT}"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+            # Run the poll — catch errors so loop never dies
+            python ai_engine.py poll && echo "✅ Poll OK" || echo "⚠️  Poll error (non-fatal) — loop continues"
+
             REMAINING=$((END - SECONDS))
-            if [ $REMAINING -gt 30 ]; then
-              echo "💤 Sleeping 30s... ($REMAINING s remaining in window)"
-              sleep 30
+            if [ $REMAINING -gt $INTERVAL ]; then
+              echo "💤 Sleeping ${INTERVAL}s... (${REMAINING}s left in window)"
+              sleep $INTERVAL
             else
-              echo "⏱️  Window closing in ${REMAINING}s — exiting loop"
+              echo "⏱️  Window closing in ${REMAINING}s — exiting loop now"
               break
             fi
           done
-          echo "✅ Poll loop complete after $ITERATION iteration(s)"
+
+          echo ""
+          echo "================================================================"
+          echo "✅ Loop complete: $ITERATION iterations over ~5h50m"
+          echo "🔁 Triggering next run via GitHub API (5-min overlap delay)..."
+          echo "================================================================"
+
+          # Self-trigger: dispatch a new workflow_dispatch run for the next cycle
+          HTTP_STATUS=$(curl -s -o /tmp/gh_response.txt -w "%{http_code}" \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${REPO}/actions/workflows/content_ai.yml/dispatches" \
+            -d '{"ref":"main","inputs":{"mode":"poll"}}')
+
+          if [ "$HTTP_STATUS" = "204" ]; then
+            echo "✅ Next run triggered successfully (HTTP 204)"
+          else
+            echo "❌ Failed to trigger next run (HTTP ${HTTP_STATUS})"
+            echo "Response: $(cat /tmp/gh_response.txt)"
+            echo "⚠️  The safety-net cron (every 6h) will restart the chain automatically"
+          fi
 
   # -----------------------------------------------------------------
-  # RECOMMEND JOB — only runs when manually dispatched as 'recommend'.
-  # AI generates the next content suggestion and posts it to Monday
-  # with status = Done (human must flip to Ready to Generate).
-  # Run this manually once a day/week from GitHub Actions → Run workflow.
+  # RECOMMEND JOB — manual only. Run from GitHub → Actions → Run workflow
+  # → select 'recommend'. Posts AI suggestion to Monday with status=Done.
   # -----------------------------------------------------------------
   daily-recommend:
-    if: |
-      github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'recommend'
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'recommend'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+
     steps:
       - uses: actions/checkout@v4
 
