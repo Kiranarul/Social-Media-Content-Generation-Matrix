@@ -37,12 +37,31 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Poll Monday.com for pending actions
+      - name: Aggressive poll loop — runs every 30s for 9 minutes
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           MONDAY_API_KEY: ${{ secrets.MONDAY_API_KEY }}
           MASTER_BOARD_ID: ${{ secrets.MASTER_BOARD_ID }}
-        run: python ai_engine.py poll
+        run: |
+          END=$((SECONDS + 540))   # 9 minutes = 540 seconds (leaves 60s buffer before timeout-minutes: 10)
+          ITERATION=0
+          while [ $SECONDS -lt $END ]; do
+            ITERATION=$((ITERATION + 1))
+            echo ""
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "🔄 Poll iteration #$ITERATION | $(date '+%H:%M:%S') | ${SECONDS}s elapsed"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            python ai_engine.py poll || echo "⚠️  Poll returned non-zero exit — continuing loop"
+            REMAINING=$((END - SECONDS))
+            if [ $REMAINING -gt 30 ]; then
+              echo "💤 Sleeping 30s... ($REMAINING s remaining in window)"
+              sleep 30
+            else
+              echo "⏱️  Window closing in ${REMAINING}s — exiting loop"
+              break
+            fi
+          done
+          echo "✅ Poll loop complete after $ITERATION iteration(s)"
 
   # -----------------------------------------------------------------
   # RECOMMEND JOB — only runs when manually dispatched as 'recommend'.
