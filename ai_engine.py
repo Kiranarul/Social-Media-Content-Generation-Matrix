@@ -6,8 +6,18 @@ from datetime import datetime
 from dotenv import load_dotenv
 import requests
 from collections import Counter
+import sys
 
 load_dotenv()
+
+# Fix for Windows Unicode errors: force UTF-8 encoding for stdout
+if sys.stdout.encoding.lower() != 'utf-8':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except AttributeError:
+        # Fallback for very old Python versions though not needed for 3.14
+        import io
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 # API Configuration
 API_KEY = os.getenv("GEMINI_API_KEY")
