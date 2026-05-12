@@ -53,7 +53,7 @@ def start_infinite_poll(callback_fn=None):
             
             # 3. Wait for 60 seconds
             # Split sleep into smaller chunks to allow faster exit if needed (not strictly required here)
-            time.sleep(60)
+            time.sleep(30)
     except KeyboardInterrupt:
         print("\n>>> LOCAL AUTOMATION SERVICE STOPPED <<<")
 
