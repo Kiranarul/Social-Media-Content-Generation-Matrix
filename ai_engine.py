@@ -320,6 +320,7 @@ def run_generation_stage(request_id, platform, format_type, pillar):
             print(f"  ⭐ TOP {i+1}: {t['title']} (Score: {t['_score']}/30)")
     
     monday = MondayAPI(MONDAY_API_KEY)
+    warned_dropdown = False
     try:
         for i, t in enumerate(topics):
             rank = t["_rank"]
@@ -337,7 +338,9 @@ def run_generation_stage(request_id, platform, format_type, pillar):
                 }))
             except Exception as e:
                 if 'ColumnValueException' in str(e):
-                    print(f"   ⚠️ Dropdown label error for '{platform}' or '{format_type}'. Retrying without them...")
+                    if not warned_dropdown:
+                        print(f"   ℹ️ Notice: Dropdown labels '{platform}'/'{format_type}' missing on subitems board. Saving without them.")
+                        warned_dropdown = True
                     sub_id = monday.create_item(MASTER_BOARD_ID, "", t["title"], parent_id=request_id, column_values=json.dumps({
                         "long_text_mm1wg3xz": {"text": t.get("description", "")},
                         "text_mm1wxd4b": t.get("sub_pillar", ""),
