@@ -299,7 +299,14 @@ def run_recommendation_stage():
 def run_generation_stage(request_id, platform, format_type, pillar):
     print("=== PHASE 2: Topic Generation ===")
     topics = generate_10_topics(platform, format_type, pillar)
-    if not topics: return
+    if not topics:
+        print("   ⚠️ Topic generation failed. Reverting status to 'Ready to Generate'...")
+        monday = MondayAPI(MONDAY_API_KEY)
+        try:
+            monday.update_status(request_id, "status", "Ready to Generate")
+        except Exception as e:
+            print(f"   ⚠️ Could not revert status: {e}")
+        return False
     
     # Sort by composite score — highest first
     for t in topics:
@@ -431,8 +438,12 @@ def run_finalization_stage(selected_id):
         
         payload = generate_full_content(topic)
         if not payload:
-            print("❌ generate_full_content returned None — aborting finalization")
-            return
+            print("❌ generate_full_content returned None — aborting finalization. Reverting status...")
+            try:
+                monday.update_status(selected_id, "status", "Topic Selected", board_id=sub_board_id)
+            except Exception as e:
+                print(f"   ⚠️ Could not revert subitem status: {e}")
+            return False
         
         print(f"   ✅ Content generated. Payload keys: {list(payload.keys())}")
         
@@ -472,6 +483,12 @@ def run_finalization_stage(selected_id):
         import traceback
         print(f"❌ Could not finalize content: {e}")
         traceback.print_exc()
+        try:
+            if 'sub_board_id' in locals() and 'selected_id' in locals():
+                monday.update_status(selected_id, "status", "Topic Selected", board_id=sub_board_id)
+                print("   ⚠️ Reverted subitem status to 'Topic Selected' after exception.")
+        except Exception as inner_e:
+            pass
 def run_poll_stage():
     """Poll Monday.com board for status changes and react accordingly.
     
