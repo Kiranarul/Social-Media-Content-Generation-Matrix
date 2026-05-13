@@ -320,64 +320,85 @@ def run_generation_stage(request_id, platform, format_type, pillar):
             print(f"  ⭐ TOP {i+1}: {t['title']} (Score: {t['_score']}/30)")
     
     monday = MondayAPI(MONDAY_API_KEY)
-    for i, t in enumerate(topics):
-        rank = t["_rank"]
+    try:
+        for i, t in enumerate(topics):
+            rank = t["_rank"]
+            
+            # Clean title — NO prefix stars, ranking goes in comment only
+            try:
+                sub_id = monday.create_item(MASTER_BOARD_ID, "", t["title"], parent_id=request_id, column_values=json.dumps({
+                    "long_text_mm1wg3xz": {"text": t.get("description", "")},
+                    "dropdown_mm1wepd4": {"labels": [platform]},
+                    "dropdown_mm1wppt3": {"labels": [format_type]},
+                    "text_mm1wxd4b": t.get("sub_pillar", ""),
+                    "text_mm1wv8e3": t.get("content_angle", ""),
+                    "text_mm1wesed": t.get("trend_topic", ""),
+                    "status": {"label": "Pending Selection"},
+                }))
+            except Exception as e:
+                if 'ColumnValueException' in str(e):
+                    print(f"   ⚠️ Dropdown label error for '{platform}' or '{format_type}'. Retrying without them...")
+                    sub_id = monday.create_item(MASTER_BOARD_ID, "", t["title"], parent_id=request_id, column_values=json.dumps({
+                        "long_text_mm1wg3xz": {"text": t.get("description", "")},
+                        "text_mm1wxd4b": t.get("sub_pillar", ""),
+                        "text_mm1wv8e3": t.get("content_angle", ""),
+                        "text_mm1wesed": t.get("trend_topic", ""),
+                        "status": {"label": "Pending Selection"},
+                    }))
+                else:
+                    raise
         
-        # Clean title — NO prefix stars, ranking goes in comment only
-        sub_id = monday.create_item(MASTER_BOARD_ID, "", t["title"], parent_id=request_id, column_values=json.dumps({
-            "long_text_mm1wg3xz": {"text": t.get("description", "")},
-            "dropdown_mm1wepd4": {"labels": [platform]},
-            "dropdown_mm1wppt3": {"labels": [format_type]},
-            "text_mm1wxd4b": t.get("sub_pillar", ""),
-            "text_mm1wv8e3": t.get("content_angle", ""),
-            "text_mm1wesed": t.get("trend_topic", ""),
-            "status": {"label": "Pending Selection"},
-        }))
+            # Post score comment in Updates — use dedicated method with full error surfacing
+            if rank == 1:
+                rank_badge = "🥇 AI TOP PICK — RANK #1"
+                why = (
+                    f"<br><br><b>💡 Why this is ranked #1:</b><br>"
+                    f"Highest overall score ({t['_score']}/30) across all 3 dimensions. "
+                    f"Trend: {t.get('trend_score')}/10 — currently hot in cybersecurity. "
+                    f"Credibility: {t.get('credibility_score')}/10 — Infinitesol has strong authority here. "
+                    f"Virality: {t.get('virality_score')}/10 — high sharing potential on {platform}."
+                )
+            elif rank == 2:
+                rank_badge = "🥈 AI RECOMMENDED — RANK #2"
+                why = (
+                    f"<br><br><b>💡 Why Rank #2:</b><br>"
+                    f"Score {t['_score']}/30 — {top_score - t['_score']} pt(s) behind #1. "
+                    f"Good pick if #1 feels too broad."
+                )
+            elif rank == 3:
+                rank_badge = "🥉 AI RECOMMENDED — RANK #3"
+                why = (
+                    f"<br><br><b>💡 Why Rank #3:</b><br>"
+                    f"Score {t['_score']}/30 — {top_score - t['_score']} pt(s) behind #1. "
+                    f"Best for a niche angle."
+                )
+            else:
+                rank_badge = f"📌 Option #{rank}"
+                why = ""
+            
+            score_comment = (
+                f"<h3>{rank_badge}</h3>"
+                f"<br><b>📊 Trend Score:</b> {t.get('trend_score', '?')}/10"
+                f"<br><b>🛡️ Credibility Score:</b> {t.get('credibility_score', '?')}/10"
+                f"<br><b>🚀 Virality Score:</b> {t.get('virality_score', '?')}/10"
+                f"<br><b>📈 Total Score:</b> {t.get('_score', 0)}/30"
+                f"<br><br><b>Content Angle:</b> {t.get('content_angle', 'N/A')}"
+                f"<br><b>Trend Topic:</b> {t.get('trend_topic', 'N/A')}"
+                f"<br><b>Sub-Pillar:</b> {t.get('sub_pillar', 'N/A')}"
+                f"{why}"
+                f"<br><br><i>To select: change Status → 'Topic Selected'</i>"
+            )
+            monday.post_update(str(sub_id), score_comment)
         
-        # Post score comment in Updates — use dedicated method with full error surfacing
-        if rank == 1:
-            rank_badge = "🥇 AI TOP PICK — RANK #1"
-            why = (
-                f"<br><br><b>💡 Why this is ranked #1:</b><br>"
-                f"Highest overall score ({t['_score']}/30) across all 3 dimensions. "
-                f"Trend: {t.get('trend_score')}/10 — currently hot in cybersecurity. "
-                f"Credibility: {t.get('credibility_score')}/10 — Infinitesol has strong authority here. "
-                f"Virality: {t.get('virality_score')}/10 — high sharing potential on {platform}."
-            )
-        elif rank == 2:
-            rank_badge = "🥈 AI RECOMMENDED — RANK #2"
-            why = (
-                f"<br><br><b>💡 Why Rank #2:</b><br>"
-                f"Score {t['_score']}/30 — {top_score - t['_score']} pt(s) behind #1. "
-                f"Good pick if #1 feels too broad."
-            )
-        elif rank == 3:
-            rank_badge = "🥉 AI RECOMMENDED — RANK #3"
-            why = (
-                f"<br><br><b>💡 Why Rank #3:</b><br>"
-                f"Score {t['_score']}/30 — {top_score - t['_score']} pt(s) behind #1. "
-                f"Best for a niche angle."
-            )
-        else:
-            rank_badge = f"📌 Option #{rank}"
-            why = ""
-        
-        score_comment = (
-            f"<h3>{rank_badge}</h3>"
-            f"<br><b>📊 Trend Score:</b> {t.get('trend_score', '?')}/10"
-            f"<br><b>🛡️ Credibility Score:</b> {t.get('credibility_score', '?')}/10"
-            f"<br><b>🚀 Virality Score:</b> {t.get('virality_score', '?')}/10"
-            f"<br><b>📈 Total Score:</b> {t.get('_score', 0)}/30"
-            f"<br><br><b>Content Angle:</b> {t.get('content_angle', 'N/A')}"
-            f"<br><b>Trend Topic:</b> {t.get('trend_topic', 'N/A')}"
-            f"<br><b>Sub-Pillar:</b> {t.get('sub_pillar', 'N/A')}"
-            f"{why}"
-            f"<br><br><i>To select: change Status → 'Topic Selected'</i>"
-        )
-        monday.post_update(str(sub_id), score_comment)
-    
-    print(f"✅ Created {len(topics)} sub-items (ranked by score, details in comments)!")
-    monday.update_status(request_id, "status", "Topics Generated")
+        print(f"✅ Created {len(topics)} sub-items (ranked by score, details in comments)!")
+        monday.update_status(request_id, "status", "Topics Generated")
+    except Exception as e:
+        print(f"❌ Error during subitem creation: {e}")
+        try:
+            monday.update_status(request_id, "status", "Ready to Generate")
+            print("   ⚠️ Reverted main item status to 'Ready to Generate' due to failure.")
+        except Exception as inner_e:
+            pass
 
 def run_finalization_stage(selected_id):
     print("=== PHASE 3: Content Finalization ===")

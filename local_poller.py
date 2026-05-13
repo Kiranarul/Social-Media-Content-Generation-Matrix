@@ -38,7 +38,7 @@ def start_infinite_poll(callback_fn=None):
     Optional callback_fn can be used by the GUI to update its console.
     """
     print(">>> LOCAL AUTOMATION SERVICE ACTIVE <<<")
-    print("Interval: 60 seconds | Status: Running...")
+    print("Interval: 15 seconds | Status: Running...")
     
     try:
         while True:
@@ -51,9 +51,8 @@ def start_infinite_poll(callback_fn=None):
             else:
                 print(log_output)
             
-            # 3. Wait for 60 seconds
-            # Split sleep into smaller chunks to allow faster exit if needed (not strictly required here)
-            time.sleep(30)
+            # 3. Wait for 15 seconds before next poll
+            time.sleep(15)
     except KeyboardInterrupt:
         print("\n>>> LOCAL AUTOMATION SERVICE STOPPED <<<")
 
