@@ -184,8 +184,8 @@ class ContentStrategyAI:
             
         pc, fc = Counter(pl), Counter(fm)
         
-        all_pl = ["LinkedIn", "Instagram", "Twitter", "Facebook"]
-        all_fm = ["Post", "Carousel", "Reel", "Video", "Poll", "Story"]
+        all_pl = ["LinkedIn", "Instagram", "Twitter", "Facebook", "Website", "Email"]
+        all_fm = ["Post", "Carousel", "Reel", "Video", "Poll", "Story", "Article", "Newsletter"]
         apil = self.ref.get("pillars", pd.DataFrame())
         all_pi = apil["Pillar"].unique().tolist() if not apil.empty and "Pillar" in apil.columns else []
         
@@ -250,13 +250,19 @@ RAW JSON ONLY.
 
 def generate_full_content(topic):
     print(f"Generating full content for: {topic.get('title')}")
+    
+    format_type = topic.get('format', '').lower() if topic.get('format') else ''
+    content_instruction = "Full post text explicitly optimized for the platform."
+    if format_type in ['article', 'newsletter']:
+        content_instruction = "Full long-form draft explicitly optimized for the platform. Use markdown headings (##) to structure the content, and include an engaging intro, detailed main body, and a strong conclusion."
+
     prompt = f"""
 Write a masterclass content post for Infinitesol.
 Blueprint: Platform: {topic.get('platform')} | Format: {topic.get('format')} | Pillar: {topic.get('pillar')} ({topic.get('sub_pillar')})
 Angle: {topic.get('content_angle')} | Trend: {topic.get('trend_topic')} | Title: {topic.get('title')} | Context: {topic.get('description')}
 
-1. content: Full post text explicitly optimized for the platform.
-2. hooks: 5 alternative hooks (newline separated)
+1. content: {content_instruction}
+2. hooks: 5 alternative hooks/subject lines (newline separated)
 3. keywords: SEO keywords (comma separated)
 4. competitor_insights: How legacy MSSPs fail vs Infinitesol
 5. engagement_score: Integer 1-10
