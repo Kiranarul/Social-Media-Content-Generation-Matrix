@@ -220,8 +220,13 @@ class ContentStrategyAI:
             "confidence_score": min(95, 70 + len(self.history))
         }
 
-def generate_10_topics(platform, format_type, pillar):
+def generate_10_topics(platform, format_type, pillar, title=None, description=None):
     print(f"Generating 10 topics for {platform} {format_type} about {pillar}...")
+    if title:
+        print(f"   Request Title: {title}")
+    if description:
+        print(f"   Request Description: {description}")
+        
     ctx = ""
     if os.path.exists(REFERENCE_DATA_FILE):
         xls = pd.ExcelFile(REFERENCE_DATA_FILE)
@@ -229,11 +234,21 @@ def generate_10_topics(platform, format_type, pillar):
         if "Content_Angles" in xls.sheet_names: ctx += "ANGLES:\n" + pd.read_excel(xls, sheet_name="Content_Angles").to_json(orient='records')[:3000] + "\n\n"
         if "Trend_Radar" in xls.sheet_names: ctx += "TRENDS:\n" + pd.read_excel(xls, sheet_name="Trend_Radar").to_json(orient='records')[:3000] + "\n\n"
     
+    # Custom instructions based on user's manual title/description
+    custom_context = ""
+    if title:
+        custom_context += f"Request Title (User's specific core idea): {title}\n"
+    if description:
+        custom_context += f"Request Description (User's specific formatting/topic instructions): {description}\n"
+        
     prompt = f"""
 You are an elite content strategist for Infinitesol (cybersecurity).
 Context: Platform: {platform} | Format: {format_type} | Pillar: {pillar}
+{custom_context}
 Reference Data:\n{ctx}
-Generate EXACTLY 10 unique content topics mapping this context seamlessly.
+Generate EXACTLY 10 unique content topics. 
+CRITICAL REQUIREMENT: If a Request Title or Request Description is provided above, you MUST heavily prioritize and strictly follow the user's specific request details (e.g. if they ask for pen testing case studies under a 'Cyber Attack Stories' pillar, make sure the generated stories are directly centered around penetration testing case studies and ethical hacking). Integrate the specific request context seamlessly with the broader pillar and the Infinitesol cybersecurity brand.
+
 Scores: trend_score, credibility_score, virality_score (1-10). Mark exactly 3 with is_top_3=true.
 Output STRICT JSON array:
 [{{ "id": 1, "title": "string", "description": "string", "pillar": "string", "sub_pillar": "string", "content_angle": "string", "trend_topic": "string", "trend_score": 8, "credibility_score": 9, "virality_score": 7, "is_top_3": true }}]
@@ -296,9 +311,9 @@ def run_recommendation_stage():
     }))
     print(f"✅ AI Recommendation posted (Item ID: {item_id}) — status set to Done. Change to 'Ready to Generate' to trigger topic generation.")
 
-def run_generation_stage(request_id, platform, format_type, pillar):
+def run_generation_stage(request_id, platform, format_type, pillar, title=None, description=None):
     print("=== PHASE 2: Topic Generation ===")
-    topics = generate_10_topics(platform, format_type, pillar)
+    topics = generate_10_topics(platform, format_type, pillar, title=title, description=description)
     if not topics:
         print("   ⚠️ Topic generation failed. Reverting status to 'Ready to Generate'...")
         monday = MondayAPI(MONDAY_API_KEY)
@@ -574,8 +589,11 @@ def run_poll_stage():
             platform = cols.get("dropdown_mm1w7sd9", "") or "LinkedIn"
             format_type = cols.get("dropdown_mm1w72b4", "") or "Post"
             pillar = cols.get("text_mm1w3t2c", "") or "General"
+            description = cols.get("long_text_mm1wzgth", "")
             
             print(f"   Platform: {platform} | Format: {format_type} | Pillar: {pillar}")
+            if description:
+                print(f"   Description: {description}")
             
             # First set status to "Selecting Topic" to prevent re-processing on next poll
             try:
@@ -586,7 +604,7 @@ def run_poll_stage():
                 continue
             
             # Now generate topics
-            run_generation_stage(item_id, platform, format_type, pillar)
+            run_generation_stage(item_id, platform, format_type, pillar, title=item_name, description=description)
             actions_taken += 1
         
         # --- PHASE 3 TRIGGER: Check subitems for "Topic Selected" status ---
