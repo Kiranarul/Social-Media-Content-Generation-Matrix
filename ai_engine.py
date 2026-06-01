@@ -269,12 +269,14 @@ def generate_full_content(topic):
     format_type = topic.get('format', '').lower() if topic.get('format') else ''
     content_instruction = "Full post text explicitly optimized for the platform."
     if format_type in ['article', 'newsletter']:
-        content_instruction = "Full long-form draft explicitly optimized for the platform. Use markdown headings (##) to structure the content, and include an engaging intro, detailed main body, and a strong conclusion."
+        content_instruction = "Full long-form draft explicitly optimized for the platform. Structure the content with clear sections and spacing, and include an engaging intro, detailed main body, and a strong conclusion. DO NOT use markdown headings."
 
     prompt = f"""
 Write a masterclass content post for Infinitesol.
 Blueprint: Platform: {topic.get('platform')} | Format: {topic.get('format')} | Pillar: {topic.get('pillar')} ({topic.get('sub_pillar')})
 Angle: {topic.get('content_angle')} | Trend: {topic.get('trend_topic')} | Title: {topic.get('title')} | Context: {topic.get('description')}
+
+CRITICAL FORMATTING RULE: Do NOT use ANY markdown formatting (no hashtags # for headers, no stars * or ** for bold/italics). Output plain text formatted with standard line breaks only.
 
 1. content: {content_instruction}
 2. hooks: 5 alternative hooks/subject lines (newline separated)

@@ -6,6 +6,7 @@ import time
 import json
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+from tkcalendar import DateEntry
 from local_poller import run_engine_command
 
 load_dotenv()
@@ -21,6 +22,7 @@ if sys.stdout.encoding.lower() != 'utf-8':
 # --- CONFIGURATION ---
 POLL_INTERVAL_S = 60
 SCHEDULE_FILE = "schedule_config.json"
+APPROVED_TOPICS_FILE = "approved_topics_memory.json"
 
 PLATFORMS = ["LinkedIn", "Instagram", "Twitter", "Facebook", "Website", "Email"]
 FORMATS = ["Post", "Carousel", "Reel", "Video", "Poll", "Story", "Article", "Newsletter"]
@@ -110,7 +112,7 @@ class DashboardGUI(ctk.CTk):
         self.parsed_items = []
         self.schedule_config = self.load_schedule()
         self.generated_topics = []
-        self.approved_topics = []
+        self.approved_topics = self.load_approved_topics()
 
         # --- Sidebar ---
         self.sidebar = ctk.CTkFrame(self, width=220, corner_radius=0)
@@ -168,6 +170,19 @@ class DashboardGUI(ctk.CTk):
     def save_schedule(self):
         with open(SCHEDULE_FILE, "w") as f:
             json.dump(self.schedule_config, f, indent=4)
+
+    def load_approved_topics(self):
+        if os.path.exists(APPROVED_TOPICS_FILE):
+            try:
+                with open(APPROVED_TOPICS_FILE, "r") as f:
+                    return json.load(f)
+            except:
+                pass
+        return []
+
+    def save_approved_topics(self):
+        with open(APPROVED_TOPICS_FILE, "w") as f:
+            json.dump(self.approved_topics, f, indent=4)
 
     # --- SETUP TABS ---
     def setup_live_tab(self):
@@ -250,16 +265,15 @@ class DashboardGUI(ctk.CTk):
         top_frame = ctk.CTkFrame(container, fg_color="transparent")
         top_frame.pack(fill="x", pady=5)
 
-        # Build list of next 14 dates
-        self.dates = [(datetime.now() + timedelta(days=i)).strftime("%Y-%m-%d (%A)") for i in range(14)]
-        self.topic_date_from_var = ctk.StringVar(value=self.dates[0])
-        self.topic_date_to_var = ctk.StringVar(value=self.dates[6] if len(self.dates)>6 else self.dates[-1])
-        
         ctk.CTkLabel(top_frame, text="From Date:").pack(side="left", padx=5)
-        ctk.CTkOptionMenu(top_frame, variable=self.topic_date_from_var, values=self.dates, width=150).pack(side="left", padx=5)
+        self.topic_date_from = DateEntry(top_frame, width=12, background='darkblue', foreground='white', borderwidth=2, date_pattern='yyyy-mm-dd')
+        self.topic_date_from.pack(side="left", padx=5)
+        self.topic_date_from.set_date(datetime.now().date())
 
         ctk.CTkLabel(top_frame, text="To Date:").pack(side="left", padx=5)
-        ctk.CTkOptionMenu(top_frame, variable=self.topic_date_to_var, values=self.dates, width=150).pack(side="left", padx=5)
+        self.topic_date_to = DateEntry(top_frame, width=12, background='darkblue', foreground='white', borderwidth=2, date_pattern='yyyy-mm-dd')
+        self.topic_date_to.pack(side="left", padx=5)
+        self.topic_date_to.set_date((datetime.now() + timedelta(days=6)).date())
 
         context_frame = ctk.CTkFrame(container, fg_color="transparent")
         context_frame.pack(fill="x", pady=5)
@@ -273,6 +287,11 @@ class DashboardGUI(ctk.CTk):
         ctk.CTkCheckBox(promo_frame, text="Enable Cross-Promotion", variable=self.cross_promo_var).pack(side="left", padx=5)
         self.topic_promo_entry = ctk.CTkEntry(promo_frame, placeholder_text="e.g. Link Website to LinkedIn, Twitter...", width=400)
         self.topic_promo_entry.pack(side="left", padx=5, fill="x", expand=True)
+        
+        # Load memory for cross promotion
+        saved_promo = self.schedule_config.get("cross_promo_memory", "")
+        if saved_promo:
+            self.topic_promo_entry.insert(0, saved_promo)
 
         self.btn_gen_topics = ctk.CTkButton(top_frame, text="Generate Topics for Date", command=self.generate_topics, fg_color="#1565c0")
         self.btn_gen_topics.pack(side="left", padx=20)
@@ -284,11 +303,15 @@ class DashboardGUI(ctk.CTk):
         self.topics_frame.pack(fill="both", expand=True, pady=10)
 
     def generate_topics(self):
-        from_str = self.topic_date_from_var.get()
-        to_str = self.topic_date_to_var.get()
+        # Save cross promotion memory
+        self.schedule_config["cross_promo_memory"] = self.topic_promo_entry.get().strip()
+        self.save_schedule()
+
+        from_dt = datetime.combine(self.topic_date_from.get_date(), datetime.min.time())
+        to_dt = datetime.combine(self.topic_date_to.get_date(), datetime.min.time())
         
-        from_dt = datetime.strptime(from_str.split(" (")[0], "%Y-%m-%d")
-        to_dt = datetime.strptime(to_str.split(" (")[0], "%Y-%m-%d")
+        from_str = from_dt.strftime("%Y-%m-%d")
+        to_str = to_dt.strftime("%Y-%m-%d")
         
         if to_dt < from_dt:
             self.topic_status.configure(text="❌ 'To' date must be after 'From' date.")
@@ -332,7 +355,7 @@ class DashboardGUI(ctk.CTk):
                 client = get_gemini_client()
                 prompt = f"""
 You are an expert cybersecurity content strategist for Infinitesol.
-I need a cohesive weekly content plan spanning from {from_str} to {to_str}.
+I need a cohesive content plan spanning from {from_str} to {to_str}.
 
 Required Schedule Items:
 {json.dumps(all_rules, indent=2)}
@@ -388,6 +411,7 @@ RAW JSON ARRAY ONLY. NO MARKDOWN. Ensure no unescaped control characters.
         # Add the target date for tracking
         item['target_date'] = item.get('date', 'Unknown')
         self.approved_topics.append(item)
+        self.save_approved_topics()
         self.topic_status.configure(text=f"✅ Approved: {item.get('title')}")
         self.refresh_editor_topic_list()
 
@@ -418,11 +442,21 @@ RAW JSON ARRAY ONLY. NO MARKDOWN. Ensure no unescaped control characters.
         bot_frame = ctk.CTkFrame(container, fg_color="transparent")
         bot_frame.pack(fill="x", pady=5)
 
+        self.btn_clear_memory = ctk.CTkButton(bot_frame, text="CLEAR TOPICS MEMORY", command=self.clear_approved_topics, fg_color="#c62828", hover_color="#b71c1c", height=40)
+        self.btn_clear_memory.pack(side="left", padx=10)
+
         self.btn_push = ctk.CTkButton(bot_frame, text="SAVE & PUSH TO MONDAY.COM", command=self.push_to_monday, fg_color="#2e7d32", height=40)
         self.btn_push.pack(side="right", padx=10)
         
         self.current_editing_payload = None
         self.current_editing_item = None
+
+    def clear_approved_topics(self):
+        self.approved_topics = []
+        self.save_approved_topics()
+        self.editor_topic_var.set("Select an Approved Topic...")
+        self.refresh_editor_topic_list()
+        self.editor_status.configure(text="✅ Cleared approved topics memory.")
 
     def refresh_editor_topic_list(self):
         if not self.approved_topics:
@@ -455,7 +489,7 @@ RAW JSON ARRAY ONLY. NO MARKDOWN. Ensure no unescaped control characters.
                     if fmt in ["reel", "video"]: guideline = "Generate a highly dynamic short-form video script including visual scene directions, on-screen text overlays, and an engaging spoken voiceover."
                     elif fmt == "carousel": guideline = "Generate a slide-by-slide outline (Slide 1 to 7) detailing slide title, visual concept, and slide text."
                     elif fmt == "poll": guideline = "Generate a caption introducing the poll, list the options, and ask users to comment."
-                    elif fmt in ["article", "newsletter"]: guideline = "Write a structured long-form article using markdown headings and bullet points."
+                    elif fmt in ["article", "newsletter"]: guideline = "Write a structured long-form article with clear spacing and bullet points (use standard dashes, no markdown asterisks)."
                     else: guideline = "Write a punchy social media post with a clear hook, brief body paragraphs, and a call-to-action."
 
                 prompt = f"""
@@ -466,6 +500,8 @@ Format: {item['format']}
 Description/Context: {item.get('description')}
 
 Instruction: {guideline}
+
+CRITICAL FORMATTING RULE: Do NOT use ANY markdown formatting (no hashtags # for headers, no stars * or ** for bold/italics). Output plain text formatted with standard line breaks only.
 
 Please generate:
 1. content: The full formatted post or script.
@@ -557,6 +593,7 @@ RAW JSON ONLY.
                 
                 # Remove from approved list
                 self.approved_topics.remove(item)
+                self.save_approved_topics()
                 self.current_editing_item = None
                 self.current_editing_payload = None
                 self.after(0, self.refresh_editor_topic_list)
@@ -724,6 +761,8 @@ Format: {item.get('format')}
 Description/Context: {item.get('description')}
 
 Format-Specific Instruction: {guideline}
+
+CRITICAL FORMATTING RULE: Do NOT use ANY markdown formatting (no hashtags # for headers, no stars * or ** for bold/italics). Output plain text formatted with standard line breaks only.
 
 Please generate:
 1. content: The full formatted post or script.

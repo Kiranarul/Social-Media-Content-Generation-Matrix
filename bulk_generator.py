@@ -112,7 +112,7 @@ content_calendar = [
         "platform": "LinkedIn",
         "format": "Newsletter",
         "description": "LinkedIn Newsletter/Article (Industry Targeted): Practical strategies to enhance SMB posture cost-effectively.",
-        "prompt_guideline": "Write a structured long-form article. Use clear markdown headers (##), bullet points, and an engaging tone. Include a clear introduction, core actionable recommendations, and a strong professional conclusion."
+        "prompt_guideline": "Write a structured long-form article. Use standard spacing, bullet points (dashes, not asterisks), and an engaging tone. Include a clear introduction, core actionable recommendations, and a strong professional conclusion. DO NOT use markdown formatting."
     },
     {
         "day": "Tuesday",
@@ -136,7 +136,7 @@ content_calendar = [
         "platform": "Website",
         "format": "Article",  # Mapped to Article from Website Blog
         "description": "Website Blog (Industry Targeted): Analysis of overlooked entry points in remote access configurations.",
-        "prompt_guideline": "Write a comprehensive blog article. Use HTML or Markdown headings to structure. Focus on technical clarity, detailing the vulnerabilities and providing clear remediation advice."
+        "prompt_guideline": "Write a comprehensive blog article. Focus on technical clarity, detailing the vulnerabilities and providing clear remediation advice. DO NOT use markdown formatting."
     },
     {
         "day": "Thursday",
@@ -216,6 +216,8 @@ Your task is to generate the full content for ALL of these topics in a single re
 
 Here is the input array of topics:
 {topics_json}
+
+CRITICAL FORMATTING RULE: Do NOT use ANY markdown formatting in the generated content (no hashtags # for headers, no stars * or ** for bold/italics). Output plain text formatted with standard line breaks only.
 
 For EACH item in the array, you must generate the following fields:
 1. content: The full formatted post or script as described in the instructions.
