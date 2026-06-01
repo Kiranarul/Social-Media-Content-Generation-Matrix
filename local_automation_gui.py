@@ -381,7 +381,8 @@ RAW JSON ARRAY ONLY. NO MARKDOWN. Ensure no unescaped control characters.
                 self.after(0, self.render_generated_topics)
                 self.after(0, lambda: self.topic_status.configure(text="✅ Topics generated!"))
             except Exception as e:
-                self.after(0, lambda: self.topic_status.configure(text=f"❌ Error: {e}"))
+                err_msg = str(e)
+                self.after(0, lambda msg=err_msg: self.topic_status.configure(text=f"❌ Error: {msg}"))
             finally:
                 self.after(0, lambda: self.btn_gen_topics.configure(state="normal"))
                 
@@ -538,7 +539,8 @@ RAW JSON ONLY.
                 self.after(0, lambda text=editor_content: self.update_editor_text(text))
                 self.after(0, lambda: self.editor_status.configure(text="✅ Content Generated! You can edit now."))
             except Exception as e:
-                self.after(0, lambda: self.editor_status.configure(text=f"❌ Error: {e}"))
+                err_msg = str(e)
+                self.after(0, lambda msg=err_msg: self.editor_status.configure(text=f"❌ Error: {msg}"))
             finally:
                 self.after(0, lambda: self.btn_gen_content.configure(state="normal"))
         
