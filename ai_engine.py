@@ -28,7 +28,7 @@ if not API_KEY or API_KEY == "your_gemini_api_key_here":
 
 # Using the new google-genai SDK (replaces deprecated google-generativeai)
 client = genai.Client(api_key=API_KEY)
-MODEL_ID = "gemini-2.5-flash"
+MODEL_ID = "gemma-4-31b-it"
 
 MASTER_BOARD_ID = os.getenv("MASTER_BOARD_ID") or os.getenv("MONDAY_BOARD_ID")
 REFERENCE_DATA_FILE = "cybersecurity_content_pillars_matrix.xlsx"

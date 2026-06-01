@@ -20,7 +20,7 @@ if sys.stdout.encoding.lower() != 'utf-8':
 API_KEY = os.getenv("GEMINI_API_KEY")
 MONDAY_API_KEY = os.getenv("MONDAY_API_KEY")
 MASTER_BOARD_ID = os.getenv("MASTER_BOARD_ID") or os.getenv("MONDAY_BOARD_ID")
-MODEL_ID = "gemini-2.5-flash"
+MODEL_ID = "gemma-4-31b-it"
 
 if not API_KEY or not MONDAY_API_KEY or not MASTER_BOARD_ID:
     print("❌ Error: Missing required credentials (GEMINI_API_KEY, MONDAY_API_KEY, MASTER_BOARD_ID)")

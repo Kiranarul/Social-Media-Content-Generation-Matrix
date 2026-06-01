@@ -23,6 +23,7 @@ if sys.stdout.encoding.lower() != 'utf-8':
 POLL_INTERVAL_S = 60
 SCHEDULE_FILE = "schedule_config.json"
 APPROVED_TOPICS_FILE = "approved_topics_memory.json"
+MODEL_ID = "gemma-4-31b-it"
 
 PLATFORMS = ["LinkedIn", "Instagram", "Twitter", "Facebook", "Website", "Email"]
 FORMATS = ["Post", "Carousel", "Reel", "Video", "Poll", "Story", "Article", "Newsletter"]
@@ -58,7 +59,7 @@ Extract all content items to generate. Output a STRICT JSON array:
 ]
 RAW JSON ONLY. No markdown wrappers. Ensure no unescaped control characters or unescaped quotes.
 """
-    response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt).text.strip()
+    response = client.models.generate_content(model=MODEL_ID, contents=prompt).text.strip()
     if response.startswith("```json"): response = response[7:-3].strip()
     elif response.startswith("```"): response = response[3:-3].strip()
     return json.loads(response)
@@ -371,7 +372,7 @@ Guidelines:
 
 RAW JSON ARRAY ONLY. NO MARKDOWN. Ensure no unescaped control characters.
 """
-                resp = client.models.generate_content(model="gemini-2.5-flash", contents=prompt).text.strip()
+                resp = client.models.generate_content(model=MODEL_ID, contents=prompt).text.strip()
                 if resp.startswith("```json"): resp = resp[7:-3].strip()
                 elif resp.startswith("```"): resp = resp[3:-3].strip()
                 
@@ -522,7 +523,7 @@ Output STRICT JSON:
 }}
 RAW JSON ONLY.
 """
-                resp = client.models.generate_content(model="gemini-2.5-flash", contents=prompt).text.strip()
+                resp = client.models.generate_content(model=MODEL_ID, contents=prompt).text.strip()
                 if resp.startswith("```json"): resp = resp[7:-3].strip()
                 elif resp.startswith("```"): resp = resp[3:-3].strip()
                 
@@ -789,7 +790,7 @@ Output a STRICT JSON response:
 }}
 RAW JSON ONLY.
 """
-                        response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt).text.strip()
+                        response = client.models.generate_content(model=MODEL_ID, contents=prompt).text.strip()
                         if response.startswith("```json"): response = response[7:-3].strip()
                         elif response.startswith("```"): response = response[3:-3].strip()
                         payload = json.loads(response)
