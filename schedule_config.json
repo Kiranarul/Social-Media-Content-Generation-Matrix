@@ -1,0 +1,58 @@
+{
+    "Monday": [
+        {
+            "platform": "LinkedIn",
+            "format": "Newsletter"
+        },
+        {
+            "platform": "Instagram",
+            "format": "Reel"
+        }
+    ],
+    "Tuesday": [
+        {
+            "platform": "LinkedIn",
+            "format": "Carousel"
+        },
+        {
+            "platform": "Instagram",
+            "format": "Carousel"
+        },
+        {
+            "platform": "Instagram",
+            "format": "Post"
+        }
+    ],
+    "Wednesday": [
+        {
+            "platform": "Website",
+            "format": "Article"
+        }
+    ],
+    "Thursday": [
+        {
+            "platform": "LinkedIn",
+            "format": "Post"
+        },
+        {
+            "platform": "Instagram",
+            "format": "Post"
+        },
+        {
+            "platform": "Facebook",
+            "format": "Post"
+        }
+    ],
+    "Friday": [
+        {
+            "platform": "LinkedIn",
+            "format": "Poll"
+        },
+        {
+            "platform": "Instagram",
+            "format": "Poll"
+        }
+    ],
+    "Saturday": [],
+    "Sunday": []
+}

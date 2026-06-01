@@ -204,20 +204,20 @@ content_calendar = [
     }
 ]
 
-def run_content_generation_with_retry(item, max_retries=5):
-    print(f"\n--- Generating (with retry): {item['day']} - {item['platform']} {item['format']} ({item['title']}) ---")
+def run_batch_content_generation(calendar, max_retries=5):
+    print(f"\n--- Generating all {len(calendar)} topics in a single request ---")
+    
+    topics_json = json.dumps(calendar, indent=2)
     
     prompt = f"""
 You are an elite content strategist for Infinitesol (a modern cybersecurity firm).
-Determine a fitting Content Pillar, Sub-pillar, Content Angle, and Trend Topic for the following post topic:
-Topic: "{item['title']}"
-Platform: {item['platform']}
-Format: {item['format']}
-Description/Context: {item['description']}
+I am providing you with a JSON array of {len(calendar)} content topics for the week. 
+Your task is to generate the full content for ALL of these topics in a single response.
 
-Format-Specific Instruction: {item['prompt_guideline']}
+Here is the input array of topics:
+{topics_json}
 
-Please generate:
+For EACH item in the array, you must generate the following fields:
 1. content: The full formatted post or script as described in the instructions.
 2. hooks: 5 alternative hooks/subject lines (newline separated)
 3. keywords: SEO keywords (comma separated)
@@ -228,7 +228,8 @@ Please generate:
 8. content_angle: The content angle used
 9. trend_topic: The industry trend or context linked to it
 
-Output a STRICT JSON response:
+Output a STRICT JSON array of objects, with EXACTLY {len(calendar)} items in the same order as the input. 
+Format for each object in the array:
 {{
   "pillar": "string",
   "sub_pillar": "string",
@@ -240,35 +241,61 @@ Output a STRICT JSON response:
   "competitor_insights": "analysis",
   "engagement_score": 9
 }}
-RAW JSON ONLY. No markdown wrappers. Ensure no unescaped control characters or unescaped quotes in the content JSON values.
+
+CRITICAL INSTRUCTIONS:
+- Return ONLY a raw JSON array `[...]`.
+- Do NOT wrap the JSON in markdown code blocks (e.g., no ```json).
+- Ensure no unescaped control characters or unescaped quotes in the content JSON values.
+- The output MUST be a valid JSON array containing exactly {len(calendar)} objects.
 """
     
-    backoff = 2
+    backoff = 5
     for attempt in range(1, max_retries + 1):
         try:
             print(f"   Attempt {attempt}/{max_retries}...")
+            # For a large batch request, system instructions and context might need a robust model
             response = client.models.generate_content(model=MODEL_ID, contents=prompt).text.strip()
-            if response.startswith("```json"): response = response[7:-3].strip()
-            elif response.startswith("```"): response = response[3:-3].strip()
             
-            payload = json.loads(response)
-            return payload
+            if response.startswith("```json"): 
+                response = response[7:].strip()
+                if response.endswith("```"): response = response[:-3].strip()
+            elif response.startswith("```"): 
+                response = response[3:].strip()
+                if response.endswith("```"): response = response[:-3].strip()
+            
+            payloads = json.loads(response)
+            
+            if not isinstance(payloads, list):
+                raise Exception("API did not return a JSON list.")
+                
+            if len(payloads) != len(calendar):
+                print(f"   ⚠️ Warning: Expected {len(calendar)} items, but got {len(payloads)}.")
+                if len(payloads) < len(calendar):
+                    raise Exception("Not enough items generated in batch.")
+            
+            return payloads
         except Exception as e:
             print(f"   ⚠️ Attempt {attempt} failed: {e}")
             if attempt == max_retries:
                 return None
+            print(f"   Retrying in {backoff} seconds...")
             time.sleep(backoff)
             backoff *= 2
 
 def main():
-    print(f"🚀 Starting Bulk Content Generation...")
+    print(f"🚀 Starting Bulk Content Generation in Single Request Mode...")
     print(f"Total items to process: {len(content_calendar)}")
     
-    for idx, item in enumerate(content_calendar):
-        print(f"\n[{idx+1}/{len(content_calendar)}] Processing: {item['title']}")
-        payload = run_content_generation_with_retry(item)
+    payloads = run_batch_content_generation(content_calendar)
+    
+    if not payloads:
+        print("❌ Failed to generate batch content. Exiting.")
+        sys.exit(1)
+        
+    for idx, (item, payload) in enumerate(zip(content_calendar, payloads)):
+        print(f"\n[{idx+1}/{len(content_calendar)}] Uploading to Monday: {item['title']}")
         if not payload:
-            print("❌ Skipping item due to generation failure.")
+            print("❌ Skipping item due to missing payload.")
             continue
         
         # 1. Create parent request item in HISTORY group (status Done)
